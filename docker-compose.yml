@@ -1,0 +1,89 @@
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: student-job-portal-postgres
+    environment:
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: ${DB_NAME:-student_job_portal}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-postgres}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - student-job-portal
+
+  minio:
+    image: minio/minio:latest
+    container_name: student-job-portal-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/minio_data
+    command: server /minio_data --console-address ":9001"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - student-job-portal
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: student-job-portal-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      APP_PORT: ${APP_PORT:-8080}
+      DB_HOST: postgres
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${DB_NAME:-student_job_portal}
+      DB_USER: ${DB_USER:-postgres}
+      DB_PASSWORD: ${DB_PASSWORD:-postgres}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-168h}
+      MINIO_ENDPOINT: ${MINIO_ENDPOINT:-localhost:9000}
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
+      MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_PROFILE_BUCKET: ${MINIO_PROFILE_BUCKET:-profile-images}
+      MINIO_STUDENT_DOCUMENT_BUCKET: ${MINIO_STUDENT_DOCUMENT_BUCKET:-student-documents}
+      MINIO_COMPANY_LOGO_BUCKET: ${MINIO_COMPANY_LOGO_BUCKET:-company-logos}
+      MINIO_COMPANY_DOCUMENT_BUCKET: ${MINIO_COMPANY_DOCUMENT_BUCKET:-company-documents}
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - student-job-portal
+
+volumes:
+  postgres_data:
+  minio_data:
+
+networks:
+  student-job-portal:
+    driver: bridge
