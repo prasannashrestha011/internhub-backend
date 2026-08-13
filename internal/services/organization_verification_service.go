@@ -30,14 +30,14 @@ const maxOrganizationVerificationDocumentSize = 10 * 1024 * 1024 // 10 MB
 
 type OrganizationVerificationService struct {
 	repo                *repositories.OrganizationVerificationRepository
-	employerProfileRepo *repositories.EmployerProfileRepository
+	employerProfileRepo *repositories.RecruiterProfileRepository
 	minioClient         *minio.Client
 	bucketName          string
 }
 
 func NewOrganizationVerificationService(
 	repo *repositories.OrganizationVerificationRepository,
-	employerProfileRepo *repositories.EmployerProfileRepository,
+	employerProfileRepo *repositories.RecruiterProfileRepository,
 	minioClient *minio.Client,
 	bucketName string,
 ) *OrganizationVerificationService {
@@ -53,6 +53,7 @@ func (s *OrganizationVerificationService) Submit(
 	userID uuid.UUID,
 	method enums.OrganizationVerificationMethod,
 	organizationEmail string,
+	documentType string,
 ) (*models.OrganizationVerification, error) {
 	if userID == uuid.Nil {
 		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidOrganizationVerification)
@@ -85,12 +86,13 @@ func (s *OrganizationVerificationService) Submit(
 
 	now := time.Now().UTC()
 	verification := &models.OrganizationVerification{
-		ID:                uuid.New(),
-		EmployerProfileID: profile.ID,
-		Status:            enums.OrganizationVerificationPending,
-		OrganizationEmail: organizationEmail,
-		EmailDomain:       address.Address[strings.Index(address.Address, "@")+1:],
-		SubmittedAt:       &now,
+		ID:                 uuid.New(),
+		RecruiterProfileID: profile.ID,
+		Status:             enums.OrganizationVerificationPending,
+		OrganizationEmail:  organizationEmail,
+		EmailDomain:        address.Address[strings.Index(address.Address, "@")+1:],
+		SubmittedAt:        &now,
+		DocumentType:       strings.TrimSpace(documentType),
 	}
 
 	if err := s.repo.Upsert(ctx, verification); err != nil {
@@ -162,7 +164,7 @@ func (s *OrganizationVerificationService) UploadDocument(ctx context.Context, us
 		return nil, fmt.Errorf("reset verification document: %w", err)
 	}
 
-	objectKey := fmt.Sprintf("organization-verifications/%s/%s%s", verification.EmployerProfileID, uuid.New(), extension)
+	objectKey := fmt.Sprintf("organization-verifications/%s/%s%s", verification.RecruiterProfileID, uuid.New(), extension)
 	if _, err := s.minioClient.PutObject(ctx, s.bucketName, objectKey, file, fileHeader.Size, minio.PutObjectOptions{ContentType: contentType}); err != nil {
 		return nil, fmt.Errorf("upload verification document: %w", err)
 	}
@@ -214,11 +216,11 @@ func (s *OrganizationVerificationService) Review(ctx context.Context, id, review
 
 	return s.repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		verificationRepo := repositories.NewOrganizationVerificationRepository(tx)
-		profileRepo := repositories.NewEmployerProfileRepository(tx)
+		profileRepo := repositories.NewRecruiterProfileRepository(tx)
 		if err := verificationRepo.UpdateReview(ctx, id, updates); err != nil {
 			return err
 		}
-		return profileRepo.UpdateVerificationStatus(ctx, verification.EmployerProfileID, string(status))
+		return profileRepo.UpdateVerificationStatus(ctx, verification.RecruiterProfileID, string(status))
 	})
 }
 

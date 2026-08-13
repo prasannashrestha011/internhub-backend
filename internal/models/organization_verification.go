@@ -10,11 +10,11 @@ import (
 type OrganizationVerification struct {
 	ID uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 
-	EmployerProfileID uuid.UUID `gorm:"type:uuid;uniqueIndex;not null" json:"employer_profile_id"`
+	RecruiterProfileID uuid.UUID `gorm:"type:uuid;uniqueIndex;not null" json:"recruiter_profile_id"`
 
 	Status enums.OrganizationVerificationStatus `gorm:"size:30;not null;default:'pending'" json:"status"`
 
-	Method enums.OrganizationVerificationMethod `gorm:":30" json:"method,omitempty"`
+	Method enums.OrganizationVerificationMethod `gorm:"size:30" json:"method,omitempty"`
 
 	// Domain/email verification
 	OrganizationEmail string `gorm:"size:255" json:"organization_email,omitempty"`
@@ -36,7 +36,7 @@ type OrganizationVerification struct {
 	ReviewedAt  *time.Time `json:"reviewed_at,omitempty"`
 	VerifiedAt  *time.Time `json:"verified_at,omitempty"`
 
-	EmployerProfile *EmployerProfile `gorm:"foreignKey:EmployerProfileID" json:"employer_profile,omitempty"`
+	RecruiterProfile *RecruiterProfile `gorm:"foreignKey:RecruiterProfileID" json:"recruiter_profile,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

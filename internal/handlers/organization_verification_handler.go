@@ -26,6 +26,7 @@ func NewOrganizationVerificationHandler(svc *services.OrganizationVerificationSe
 }
 
 type submitOrganizationVerificationInput struct {
+	DocumentType      string `json:"document_type"`
 	OrganizationEmail string `json:"organization_email"`
 }
 type reviewOrganizationVerificationInput struct {
@@ -45,7 +46,7 @@ func (h *OrganizationVerificationHandler) SubmitVerification(c *gin.Context) {
 		responses.Error(c, http.StatusBadRequest, "invalid request payload")
 		return
 	}
-	verification, err := h.Svc.Submit(c.Request.Context(), userID, enums.VerificationMethodDocument, input.OrganizationEmail)
+	verification, err := h.Svc.Submit(c.Request.Context(), userID, enums.VerificationMethodDocument, input.OrganizationEmail, input.DocumentType)
 	if err != nil {
 		h.respondError(c, err)
 		return
