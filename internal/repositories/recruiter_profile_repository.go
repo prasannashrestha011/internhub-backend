@@ -10,19 +10,19 @@ import (
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 )
 
-type EmployerProfileRepository struct {
+type RecruiterProfileRepository struct {
 	DB *gorm.DB
 }
 
-func NewEmployerProfileRepository(db *gorm.DB) *EmployerProfileRepository {
-	return &EmployerProfileRepository{
+func NewRecruiterProfileRepository(db *gorm.DB) *RecruiterProfileRepository {
+	return &RecruiterProfileRepository{
 		DB: db,
 	}
 }
 
-// Upsert creates a new employer profile or updates the existing
+// Upsert creates a new recruiter profile or updates the existing
 // organization/profile information when user_id already exists.
-func (r *EmployerProfileRepository) Upsert(ctx context.Context, profile *models.EmployerProfile) error {
+func (r *RecruiterProfileRepository) Upsert(ctx context.Context, profile *models.RecruiterProfile) error {
 	return r.DB.Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "user_id"},
@@ -41,13 +41,13 @@ func (r *EmployerProfileRepository) Upsert(ctx context.Context, profile *models.
 	}).Create(profile).Error
 }
 
-// GetByUserID retrieves an employer profile by user_id.
+// GetByUserID retrieves an recruiter profile by user_id.
 // User information is also preloaded.
-func (r *EmployerProfileRepository) GetByUserID(
+func (r *RecruiterProfileRepository) GetByUserID(
 	ctx context.Context,
 	userID uuid.UUID,
-) (*models.EmployerProfile, error) {
-	var profile models.EmployerProfile
+) (*models.RecruiterProfile, error) {
+	var profile models.RecruiterProfile
 
 	err := r.DB.
 		Preload("User").
@@ -61,12 +61,12 @@ func (r *EmployerProfileRepository) GetByUserID(
 	return &profile, nil
 }
 
-// GetByID retrieves an employer profile by profile ID.
-func (r *EmployerProfileRepository) GetByID(
+// GetByID retrieves an recruiter profile by profile ID.
+func (r *RecruiterProfileRepository) GetByID(
 	ctx context.Context,
 	id uuid.UUID,
-) (*models.EmployerProfile, error) {
-	var profile models.EmployerProfile
+) (*models.RecruiterProfile, error) {
+	var profile models.RecruiterProfile
 
 	err := r.DB.
 		Preload("User").
@@ -79,8 +79,8 @@ func (r *EmployerProfileRepository) GetByID(
 	return &profile, nil
 }
 
-func (r *EmployerProfileRepository) UpdateEmployeeVerification(ctx context.Context, userID uuid.UUID, isVerified bool) error {
-	return r.DB.Model(&models.EmployerProfile{}).
+func (r *RecruiterProfileRepository) UpdateEmployeeVerification(ctx context.Context, userID uuid.UUID, isVerified bool) error {
+	return r.DB.Model(&models.RecruiterProfile{}).
 		Where("user_id = ?", userID).
 		Update("verification_status", isVerified).
 		Error
@@ -88,38 +88,38 @@ func (r *EmployerProfileRepository) UpdateEmployeeVerification(ctx context.Conte
 
 // UpdateVerificationStatus keeps the profile-level status in sync with the
 // associated organization verification review.
-func (r *EmployerProfileRepository) UpdateVerificationStatus(
+func (r *RecruiterProfileRepository) UpdateVerificationStatus(
 	ctx context.Context,
-	employerProfileID uuid.UUID,
+	recruiterProfileID uuid.UUID,
 	status string,
 ) error {
 	return r.DB.
 		WithContext(ctx).
-		Model(&models.EmployerProfile{}).
-		Where("id = ?", employerProfileID).
+		Model(&models.RecruiterProfile{}).
+		Where("id = ?", recruiterProfileID).
 		Update("verification_status", status).
 		Error
 }
 
-// DeleteByUserID removes an employer profile associated with the given user.
-func (r *EmployerProfileRepository) DeleteByUserID(
+// DeleteByUserID removes an recruiter profile associated with the given user.
+func (r *RecruiterProfileRepository) DeleteByUserID(
 	ctx context.Context,
 	userID uuid.UUID,
 ) error {
 	return r.DB.
 		Where("user_id = ?", userID).
-		Delete(&models.EmployerProfile{}).
+		Delete(&models.RecruiterProfile{}).
 		Error
 }
 
-func (r *EmployerProfileRepository) UpdateOrganizationLogo(
+func (r *RecruiterProfileRepository) UpdateOrganizationLogo(
 	ctx context.Context,
 	userID uuid.UUID,
 	objectKey string,
 ) error {
 	return r.DB.
 		WithContext(ctx).
-		Model(&models.EmployerProfile{}).
+		Model(&models.RecruiterProfile{}).
 		Where("user_id = ?", userID).
 		Update("organization_logo", objectKey).
 		Error

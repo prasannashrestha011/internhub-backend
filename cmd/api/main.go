@@ -69,9 +69,9 @@ func setupRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logge
 	// --- 1. Repositories ---
 	userRepo := repositories.NewUserRepository(db)
 	studentRepo := repositories.NewStudentRepository(db)
-	employerProfileRepo := repositories.NewEmployerProfileRepository(db)
+	recruiterProfileRepo := repositories.NewRecruiterProfileRepository(db)
 	organizationVerificationRepo := repositories.NewOrganizationVerificationRepository(db)
-	jobRepo := repositories.NewJobRepository(db)
+	internshipRepo := repositories.NewInternshipRepository(db)
 	appRepo := repositories.NewJobApplicationRepository(db)
 	ansRepo := repositories.NewApplicationAnswerRepository(db)
 	appHistoryRepo := repositories.NewApplicationStatusHistoryRepository(db)
@@ -81,18 +81,20 @@ func setupRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logge
 	authSvc := services.NewAuthService(userRepo, cfg, log)
 	studentSvc := services.NewStudentService(studentRepo, minioClient, cfg, log)
 	appSvc := services.NewApplicationService(appRepo, appHistoryRepo, minioClient, cfg, log)
-	interviewSvc := services.NewInterviewService(interviewRepo, jobRepo, appSvc)
-	employerProfileSvc := services.NewEmployerProfileService(employerProfileRepo, minioClient, cfg.MinIO.ProfileBucket)
-	organizationVerificationSvc := services.NewOrganizationVerificationService(organizationVerificationRepo, employerProfileRepo, minioClient, cfg.MinIO.CompanyDocBucket)
+	internshipSvc := services.NewInternshipService(internshipRepo)
+	interviewSvc := services.NewInterviewService(interviewRepo, internshipRepo, appSvc)
+	recruiterProfileSvc := services.NewRecruiterProfileService(recruiterProfileRepo, minioClient, cfg.MinIO.ProfileBucket)
+	organizationVerificationSvc := services.NewOrganizationVerificationService(organizationVerificationRepo, recruiterProfileRepo, minioClient, cfg.MinIO.CompanyDocBucket)
 
 	// --- 3. Handlers ---
 	authHandler := handlers.NewAuthHandler(authSvc, log)
 	adminHandler := handlers.NewAdminHandler(userRepo, log)
 	studentHandler := handlers.NewStudentHandler(studentSvc, studentRepo, cfg, log)
-	employerProfileHandler := handlers.NewEmployerProfileHandler(employerProfileSvc, log)
+	recruiterProfileHandler := handlers.NewRecruiterProfileHandler(recruiterProfileSvc, log)
 	organizationVerificationHandler := handlers.NewOrganizationVerificationHandler(organizationVerificationSvc, log)
-	appHandler := handlers.NewApplicationHandler(appSvc, appRepo, jobRepo, ansRepo, appHistoryRepo, log)
-	interviewHandler := handlers.NewInterviewHandler(interviewSvc, interviewRepo, jobRepo)
+	internshipHandler := handlers.NewInternshipHandler(internshipSvc)
+	appHandler := handlers.NewApplicationHandler(appSvc, appRepo, internshipRepo, ansRepo, appHistoryRepo, log)
+	interviewHandler := handlers.NewInterviewHandler(interviewSvc, interviewRepo, internshipRepo)
 
 	// --- 4. API v1 Router Groups ---
 	v1 := router.Group("/api/v1")
@@ -123,18 +125,18 @@ func setupRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logge
 		}
 
 		// Employer Routes
-		employerGroup := v1.Group("/employers")
-		employerGroup.Use(middleware.JWTAuthMiddleware(cfg, log), middleware.RequireRoles(models.RoleEmployer))
+		recruiterGroup := v1.Group("/recruiters")
+		recruiterGroup.Use(middleware.JWTAuthMiddleware(cfg, log), middleware.RequireRoles(models.RoleEmployer))
 		{
 			// Profile
-			profile := employerGroup.Group("/me/profile")
+			profile := recruiterGroup.Group("/me/profile")
 			{
-				profile.GET("", employerProfileHandler.GetMyProfile)
-				profile.POST("/logo", employerProfileHandler.UploadOrganizationLogo)
-				profile.PUT("", employerProfileHandler.UpsertMyProfile)
-				profile.DELETE("", employerProfileHandler.DeleteMyProfile)
+				profile.GET("", recruiterProfileHandler.GetMyProfile)
+				profile.POST("/logo", recruiterProfileHandler.UploadOrganizationLogo)
+				profile.PUT("", recruiterProfileHandler.UpsertMyProfile)
+				profile.DELETE("", recruiterProfileHandler.DeleteMyProfile)
 			}
-			verification := employerGroup.Group("/me/verification")
+			verification := recruiterGroup.Group("/me/verification")
 			{
 				verification.GET("", organizationVerificationHandler.GetMyVerification)
 				verification.POST("", organizationVerificationHandler.SubmitVerification)
@@ -142,10 +144,10 @@ func setupRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logge
 			}
 
 			// Application Status Updates
-			employerGroup.PUT("/applications/:id/status", appHandler.UpdateStatus)
+			recruiterGroup.PUT("/applications/:id/status", appHandler.UpdateStatus)
 
 			// Interviews
-			interviews := employerGroup.Group("/interviews")
+			interviews := recruiterGroup.Group("/interviews")
 			{
 				interviews.POST("", interviewHandler.Schedule)
 				interviews.GET("", interviewHandler.ListEmployer)
@@ -176,14 +178,30 @@ func setupRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logge
 			}
 		}
 
-		// Student Job Endpoints
-		studentJobs := v1.Group("/jobs")
-		studentJobs.Use(middleware.JWTAuthMiddleware(cfg, log), middleware.RequireRoles(models.RoleStudent))
+		// Public internship discovery endpoints
+		internships := v1.Group("/internships")
 		{
-			studentJobs.POST("/:job_id/apply", appHandler.Apply)
+			internships.GET("", internshipHandler.SearchInternships)
+			internships.GET("/:id", internshipHandler.GetInternship)
 		}
 
-		// Employer & Admin Job Management Endpoints
+		// Internship applications
+		studentInternships := v1.Group("/internships")
+		studentInternships.Use(middleware.JWTAuthMiddleware(cfg, log), middleware.RequireRoles(models.RoleStudent))
+		{
+			studentInternships.POST("/:internship_id/apply", appHandler.Apply)
+		}
+
+		// Employer internship management
+		recruiterInternships := recruiterGroup.Group("/me/internships")
+		{
+			recruiterInternships.GET("", internshipHandler.ListMyInternships)
+			recruiterInternships.POST("", internshipHandler.CreateInternship)
+			recruiterInternships.PUT("/:id", internshipHandler.UpdateInternship)
+			recruiterInternships.DELETE("/:id", internshipHandler.DeleteInternship)
+			recruiterInternships.GET("/:id/applications", appHandler.ListForJob)
+		}
+
 		// Shared Authenticated Application Resources
 		appsGroup := v1.Group("/applications")
 		appsGroup.Use(middleware.JWTAuthMiddleware(cfg, log))
@@ -208,11 +226,11 @@ func autoMigrate(db *gorm.DB) error {
 		&models.StudentProject{},
 		&models.StudentCertification{},
 		&models.StudentDocument{},
-		&models.Job{},
+		&models.Internship{},
 		&models.JobApplication{},
 		&models.Interview{},
 		&models.ApplicationStatusHistory{},
-		&models.EmployerProfile{},
+		&models.RecruiterProfile{},
 		&models.OrganizationVerification{},
 	)
 }

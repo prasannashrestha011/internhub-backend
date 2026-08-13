@@ -7,7 +7,7 @@ import (
 	"gorm.io/gorm"
 )
 
-type EmployerProfile struct {
+type RecruiterProfile struct {
 	ID     uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 	UserID uuid.UUID `gorm:"type:uuid;uniqueIndex;not null" json:"user_id"`
 
@@ -23,13 +23,13 @@ type EmployerProfile struct {
 	VerificationStatus  string `gorm:"default:draft" json:"verification_status"`
 
 	User         *User                     `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	Verification *OrganizationVerification `gorm:"foreignKey:EmployerProfileID" json:"verification,omitempty"`
+	Verification *OrganizationVerification `gorm:"foreignKey:RecruiterProfileID" json:"verification,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-func (ep *EmployerProfile) BeforeCreate(tx *gorm.DB) error {
+func (ep *RecruiterProfile) BeforeCreate(tx *gorm.DB) error {
 	if ep.ID == uuid.Nil {
 		ep.ID = uuid.New()
 	}

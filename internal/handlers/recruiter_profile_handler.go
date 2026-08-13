@@ -13,24 +13,24 @@ import (
 	"github.com/prasanna/student-job-portal/backend/internal/services"
 )
 
-type EmployerProfileHandler struct {
-	Svc *services.EmployerProfileService
+type RecruiterProfileHandler struct {
+	Svc *services.RecruiterProfileService
 	Log *logger.Logger
 }
 
-func NewEmployerProfileHandler(
-	svc *services.EmployerProfileService,
+func NewRecruiterProfileHandler(
+	svc *services.RecruiterProfileService,
 	l *logger.Logger,
-) *EmployerProfileHandler {
-	return &EmployerProfileHandler{
+) *RecruiterProfileHandler {
+	return &RecruiterProfileHandler{
 		Svc: svc,
 		Log: l,
 	}
 }
 
-// GetMyProfile retrieves the employer profile
-// for the currently authenticated employer.
-func (h *EmployerProfileHandler) GetMyProfile(c *gin.Context) {
+// GetMyProfile retrieves the recruiter profile
+// for the currently authenticated recruiter.
+func (h *RecruiterProfileHandler) GetMyProfile(c *gin.Context) {
 	userID, err := getUserIDFromContext(c)
 	if err != nil {
 		responses.Error(
@@ -44,7 +44,7 @@ func (h *EmployerProfileHandler) GetMyProfile(c *gin.Context) {
 	profile, err := h.Svc.GetByUserID(c.Request.Context(), userID)
 	if err != nil {
 		h.Log.Error(
-			"failed to get employer profile for user %s: %v",
+			"failed to get recruiter profile for user %s: %v",
 			userID,
 			err,
 		)
@@ -52,7 +52,7 @@ func (h *EmployerProfileHandler) GetMyProfile(c *gin.Context) {
 		responses.Error(
 			c,
 			http.StatusNotFound,
-			"employer profile not found",
+			"recruiter profile not found",
 		)
 		return
 	}
@@ -60,14 +60,14 @@ func (h *EmployerProfileHandler) GetMyProfile(c *gin.Context) {
 	responses.Success(
 		c,
 		http.StatusOK,
-		"employer profile retrieved successfully",
+		"recruiter profile retrieved successfully",
 		profile,
 	)
 }
 
-// UpsertMyProfile creates or updates the employer profile
-// for the currently authenticated employer.
-func (h *EmployerProfileHandler) UpsertMyProfile(c *gin.Context) {
+// UpsertMyProfile creates or updates the recruiter profile
+// for the currently authenticated recruiter.
+func (h *RecruiterProfileHandler) UpsertMyProfile(c *gin.Context) {
 	userID, err := getUserIDFromContext(c)
 	if err != nil {
 		responses.Error(
@@ -78,7 +78,7 @@ func (h *EmployerProfileHandler) UpsertMyProfile(c *gin.Context) {
 		return
 	}
 
-	var input models.EmployerProfile
+	var input models.RecruiterProfile
 
 	if err := c.ShouldBindJSON(&input); err != nil {
 		responses.Error(
@@ -92,7 +92,7 @@ func (h *EmployerProfileHandler) UpsertMyProfile(c *gin.Context) {
 	profile, err := h.Svc.CreateOrUpdateProfile(c.Request.Context(), userID, &input)
 	if err != nil {
 		h.Log.Error(
-			"failed to upsert employer profile for user %s: %v",
+			"failed to upsert recruiter profile for user %s: %v",
 			userID,
 			err,
 		)
@@ -100,7 +100,7 @@ func (h *EmployerProfileHandler) UpsertMyProfile(c *gin.Context) {
 		responses.Error(
 			c,
 			http.StatusInternalServerError,
-			"failed to save employer profile",
+			"failed to save recruiter profile",
 		)
 		return
 	}
@@ -108,14 +108,14 @@ func (h *EmployerProfileHandler) UpsertMyProfile(c *gin.Context) {
 	responses.Success(
 		c,
 		http.StatusOK,
-		"employer profile saved successfully",
+		"recruiter profile saved successfully",
 		profile,
 	)
 }
 
-// DeleteMyProfile deletes the employer profile
+// DeleteMyProfile deletes the recruiter profile
 // associated with the currently authenticated user.
-func (h *EmployerProfileHandler) DeleteMyProfile(c *gin.Context) {
+func (h *RecruiterProfileHandler) DeleteMyProfile(c *gin.Context) {
 	userID, err := getUserIDFromContext(c)
 	if err != nil {
 		responses.Error(
@@ -128,7 +128,7 @@ func (h *EmployerProfileHandler) DeleteMyProfile(c *gin.Context) {
 
 	if err := h.Svc.DeleteByUserID(c.Request.Context(), userID); err != nil {
 		h.Log.Error(
-			"failed to delete employer profile for user %s: %v",
+			"failed to delete recruiter profile for user %s: %v",
 			userID,
 			err,
 		)
@@ -136,7 +136,7 @@ func (h *EmployerProfileHandler) DeleteMyProfile(c *gin.Context) {
 		responses.Error(
 			c,
 			http.StatusInternalServerError,
-			"failed to delete employer profile",
+			"failed to delete recruiter profile",
 		)
 		return
 	}
@@ -144,7 +144,7 @@ func (h *EmployerProfileHandler) DeleteMyProfile(c *gin.Context) {
 	responses.Success(
 		c,
 		http.StatusOK,
-		"employer profile deleted successfully",
+		"recruiter profile deleted successfully",
 		nil,
 	)
 }
@@ -173,7 +173,7 @@ func getUserIDFromContext(c *gin.Context) (uuid.UUID, error) {
 	}
 }
 
-func (h *EmployerProfileHandler) UploadOrganizationLogo(c *gin.Context) {
+func (h *RecruiterProfileHandler) UploadOrganizationLogo(c *gin.Context) {
 	userID, err := getUserIDFromContext(c)
 	if err != nil {
 		responses.Error(c, http.StatusUnauthorized, err.Error())

@@ -14,13 +14,13 @@ import (
 )
 
 type InterviewHandler struct {
-	Svc     *services.InterviewService
-	Repo    *repositories.InterviewRepository
-	JobRepo *repositories.JobRepository
+	Svc            *services.InterviewService
+	Repo           *repositories.InterviewRepository
+	InternshipRepo *repositories.InternshipRepository
 }
 
-func NewInterviewHandler(svc *services.InterviewService, repo *repositories.InterviewRepository, jobRepo *repositories.JobRepository) *InterviewHandler {
-	return &InterviewHandler{Svc: svc, Repo: repo, JobRepo: jobRepo}
+func NewInterviewHandler(svc *services.InterviewService, repo *repositories.InterviewRepository, internshipRepo *repositories.InternshipRepository) *InterviewHandler {
+	return &InterviewHandler{Svc: svc, Repo: repo, InternshipRepo: internshipRepo}
 }
 
 // Employer: schedule an interview
@@ -43,7 +43,7 @@ func (h *InterviewHandler) Schedule(c *gin.Context) {
 		return
 	}
 	// ensure employer owns the job
-	job, err := h.JobRepo.GetByID(ctx, payload.JobID)
+	job, err := h.InternshipRepo.GetByID(ctx, payload.JobID)
 	if err != nil {
 		responses.Error(c, http.StatusBadRequest, "job not found")
 		return

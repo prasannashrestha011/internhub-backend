@@ -16,8 +16,8 @@ import (
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 )
 
-type EmployerProfileService struct {
-	repo        *repositories.EmployerProfileRepository
+type RecruiterProfileService struct {
+	repo        *repositories.RecruiterProfileRepository
 	minioClient *minio.Client
 	bucketName  string
 }
@@ -26,31 +26,31 @@ const (
 	maxOrganizationLogoSize = 5 * 1024 * 1024 // 5 MB
 )
 
-func NewEmployerProfileService(
-	repo *repositories.EmployerProfileRepository,
+func NewRecruiterProfileService(
+	repo *repositories.RecruiterProfileRepository,
 	minioClient *minio.Client,
 	bucketName string,
-) *EmployerProfileService {
-	return &EmployerProfileService{
+) *RecruiterProfileService {
+	return &RecruiterProfileService{
 		repo:        repo,
 		minioClient: minioClient,
 		bucketName:  bucketName,
 	}
 }
 
-// CreateOrUpdateProfile creates a new employer profile
+// CreateOrUpdateProfile creates a new recruiter profile
 // or updates the existing profile for the user.
-func (s *EmployerProfileService) CreateOrUpdateProfile(
+func (s *RecruiterProfileService) CreateOrUpdateProfile(
 	ctx context.Context,
 	userID uuid.UUID,
-	profile *models.EmployerProfile,
-) (*models.EmployerProfile, error) {
+	profile *models.RecruiterProfile,
+) (*models.RecruiterProfile, error) {
 	if userID == uuid.Nil {
 		return nil, errors.New("invalid user id")
 	}
 
 	if profile == nil {
-		return nil, errors.New("employer profile is required")
+		return nil, errors.New("recruiter profile is required")
 	}
 
 	profile.OrganizationName = strings.TrimSpace(profile.OrganizationName)
@@ -80,11 +80,11 @@ func (s *EmployerProfileService) CreateOrUpdateProfile(
 	return s.repo.GetByUserID(ctx, userID)
 }
 
-// GetByUserID returns an employer profile by user ID.
-func (s *EmployerProfileService) GetByUserID(
+// GetByUserID returns an recruiter profile by user ID.
+func (s *RecruiterProfileService) GetByUserID(
 	ctx context.Context,
 	userID uuid.UUID,
-) (*models.EmployerProfile, error) {
+) (*models.RecruiterProfile, error) {
 	if userID == uuid.Nil {
 		return nil, errors.New("invalid user id")
 	}
@@ -101,20 +101,20 @@ func (s *EmployerProfileService) GetByUserID(
 	return user, nil
 }
 
-// GetByID returns an employer profile by profile ID.
-func (s *EmployerProfileService) GetByID(
+// GetByID returns an recruiter profile by profile ID.
+func (s *RecruiterProfileService) GetByID(
 	ctx context.Context,
 	id uuid.UUID,
-) (*models.EmployerProfile, error) {
+) (*models.RecruiterProfile, error) {
 	if id == uuid.Nil {
-		return nil, errors.New("invalid employer profile id")
+		return nil, errors.New("invalid recruiter profile id")
 	}
 
 	return s.repo.GetByID(ctx, id)
 }
 
-// DeleteByUserID deletes an employer profile.
-func (s *EmployerProfileService) DeleteByUserID(
+// DeleteByUserID deletes an recruiter profile.
+func (s *RecruiterProfileService) DeleteByUserID(
 	ctx context.Context,
 	userID uuid.UUID,
 ) error {
@@ -125,7 +125,7 @@ func (s *EmployerProfileService) DeleteByUserID(
 	return s.repo.DeleteByUserID(ctx, userID)
 }
 
-func (s *EmployerProfileService) UploadOrganizationLogo(
+func (s *RecruiterProfileService) UploadOrganizationLogo(
 	ctx context.Context,
 	userID uuid.UUID,
 	fileHeader *multipart.FileHeader,
@@ -147,10 +147,10 @@ func (s *EmployerProfileService) UploadOrganizationLogo(
 		return "", errors.New("organization logo must be smaller than 5MB")
 	}
 
-	// Make sure employer profile exists.
+	// Make sure recruiter profile exists.
 	profile, err := s.repo.GetByUserID(ctx, userID)
 	if err != nil {
-		return "", fmt.Errorf("failed to get employer profile: %w", err)
+		return "", fmt.Errorf("failed to get recruiter profile: %w", err)
 	}
 
 	file, err := fileHeader.Open()
@@ -238,7 +238,7 @@ func (s *EmployerProfileService) UploadOrganizationLogo(
 	return presigned_url, nil
 
 }
-func (s *EmployerProfileService) GetLogoURL(
+func (s *RecruiterProfileService) GetLogoURL(
 	ctx context.Context,
 	objectKey string,
 ) (string, error) {
