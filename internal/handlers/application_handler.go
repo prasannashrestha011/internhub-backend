@@ -16,19 +16,19 @@ import (
 
 // ApplicationHandler exposes endpoints for applying and reviewing applications
 type ApplicationHandler struct {
-	Svc        *services.ApplicationService
-	Repo       *repositories.JobApplicationRepository
-	JobRepo    *repositories.JobRepository
-	AnsRepo    *repositories.ApplicationAnswerRepository
-	StatusRepo *repositories.ApplicationStatusHistoryRepository
-	Log        *logger.Logger
+	Svc            *services.ApplicationService
+	Repo           *repositories.JobApplicationRepository
+	InternshipRepo *repositories.InternshipRepository
+	AnsRepo        *repositories.ApplicationAnswerRepository
+	StatusRepo     *repositories.ApplicationStatusHistoryRepository
+	Log            *logger.Logger
 }
 
-func NewApplicationHandler(svc *services.ApplicationService, repo *repositories.JobApplicationRepository, jr *repositories.JobRepository, ans *repositories.ApplicationAnswerRepository, status *repositories.ApplicationStatusHistoryRepository, l *logger.Logger) *ApplicationHandler {
-	return &ApplicationHandler{Svc: svc, Repo: repo, JobRepo: jr, AnsRepo: ans, StatusRepo: status, Log: l}
+func NewApplicationHandler(svc *services.ApplicationService, repo *repositories.JobApplicationRepository, internshipRepo *repositories.InternshipRepository, ans *repositories.ApplicationAnswerRepository, status *repositories.ApplicationStatusHistoryRepository, l *logger.Logger) *ApplicationHandler {
+	return &ApplicationHandler{Svc: svc, Repo: repo, InternshipRepo: internshipRepo, AnsRepo: ans, StatusRepo: status, Log: l}
 }
 
-// Student: Apply to a job (multipart form, optional resume file field "resume")
+// Student: Apply to an internship (multipart form, optional resume file field "resume").
 func (h *ApplicationHandler) Apply(c *gin.Context) {
 	uid, ok := c.Get("user_id")
 	if !ok {
@@ -41,10 +41,13 @@ func (h *ApplicationHandler) Apply(c *gin.Context) {
 		responses.Error(c, http.StatusUnauthorized, "invalid user id")
 		return
 	}
-	jobIDStr := c.Param("job_id")
-	jobID, err := uuid.Parse(jobIDStr)
+	internshipID, err := uuid.Parse(c.Param("internship_id"))
 	if err != nil {
-		responses.Error(c, http.StatusBadRequest, "invalid job id")
+		responses.Error(c, http.StatusBadRequest, "invalid internship id")
+		return
+	}
+	if _, err := h.InternshipRepo.GetByID(c.Request.Context(), internshipID); err != nil {
+		responses.Error(c, http.StatusNotFound, "internship not found")
 		return
 	}
 	cover := c.PostForm("cover_note")
@@ -60,7 +63,7 @@ func (h *ApplicationHandler) Apply(c *gin.Context) {
 	// validation
 	maxResume := int64(5 * 1024 * 1024)
 	allowed := map[string]bool{"application/pdf": true, "application/msword": true, "application/vnd.openxmlformats-officedocument.wordprocessingml.document": true}
-	app, err := h.Svc.Apply(c.Request.Context(), jobID, studentID, cover, resume, answers, maxResume, allowed, h.AnsRepo, h.StatusRepo)
+	app, err := h.Svc.Apply(c.Request.Context(), internshipID, studentID, cover, resume, answers, maxResume, allowed, h.AnsRepo, h.StatusRepo)
 	if err != nil {
 		h.Log.Error("apply failed: %v", err)
 		responses.Error(c, http.StatusInternalServerError, "failed to apply")
@@ -103,7 +106,7 @@ func (h *ApplicationHandler) ListForJob(c *gin.Context) {
 		return
 	}
 	// ensure job belongs to employer
-	job, err := h.JobRepo.GetByID(ctx, jobID)
+	job, err := h.InternshipRepo.GetByID(ctx, jobID)
 	if err != nil {
 		responses.Error(c, http.StatusNotFound, "job not found")
 		return
@@ -151,13 +154,14 @@ func (h *ApplicationHandler) ListAnswers(c *gin.Context) {
 	userID, _ := uuid.Parse(userIDStr)
 	roleI, _ := c.Get("role")
 	roleStr, _ := roleI.(string)
-	if roleStr == "student" {
+	switch roleStr {
+	case "student":
 		if app.StudentID != userID {
 			responses.Error(c, http.StatusForbidden, "not allowed")
 			return
 		}
-	} else if roleStr == "employer" {
-		job, err := h.JobRepo.GetByID(ctx, app.JobID)
+	case "employer":
+		job, err := h.InternshipRepo.GetByID(ctx, app.JobID)
 		if err != nil {
 			responses.Error(c, http.StatusNotFound, "job not found")
 			return
@@ -166,7 +170,7 @@ func (h *ApplicationHandler) ListAnswers(c *gin.Context) {
 			responses.Error(c, http.StatusForbidden, "not allowed")
 			return
 		}
-	} else {
+	default:
 		responses.Error(c, http.StatusForbidden, "not allowed")
 		return
 	}
@@ -208,7 +212,7 @@ func (h *ApplicationHandler) ListHistory(c *gin.Context) {
 			return
 		}
 	} else if roleStr == "employer" {
-		job, err := h.JobRepo.GetByID(ctx, app.JobID)
+		job, err := h.InternshipRepo.GetByID(ctx, app.JobID)
 		if err != nil {
 			responses.Error(c, http.StatusNotFound, "job not found")
 			return
@@ -251,7 +255,7 @@ func (h *ApplicationHandler) UpdateStatus(c *gin.Context) {
 		responses.Error(c, http.StatusNotFound, "application not found")
 		return
 	}
-	job, err := h.JobRepo.GetByID(ctx, app.JobID)
+	job, err := h.InternshipRepo.GetByID(ctx, app.JobID)
 	if err != nil {
 		responses.Error(c, http.StatusNotFound, "job not found")
 		return
