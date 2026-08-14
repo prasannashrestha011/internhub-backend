@@ -51,6 +51,7 @@ func (r *RecruiterProfileRepository) GetByUserID(
 
 	err := r.DB.
 		Preload("User").
+		Preload("Verification").
 		Where("user_id = ?", userID).
 		First(&profile).
 		Error
