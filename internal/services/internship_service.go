@@ -19,11 +19,12 @@ var (
 )
 
 type InternshipService struct {
-	repo *repositories.InternshipRepository
+	repo          *repositories.InternshipRepository
+	recruiterRepo *repositories.RecruiterProfileRepository
 }
 
-func NewInternshipService(repo *repositories.InternshipRepository) *InternshipService {
-	return &InternshipService{repo: repo}
+func NewInternshipService(repo *repositories.InternshipRepository, recruiterRepo *repositories.RecruiterProfileRepository) *InternshipService {
+	return &InternshipService{repo: repo, recruiterRepo: recruiterRepo}
 }
 
 func (s *InternshipService) CreateInternship(ctx context.Context, internship *models.Internship) error {
@@ -36,9 +37,15 @@ func (s *InternshipService) CreateInternship(ctx context.Context, internship *mo
 	if err := validateInternship(internship); err != nil {
 		return err
 	}
-	if internship.Status == "" {
-		internship.Status = "published"
+	recruiterProfile, err := s.recruiterRepo.GetByUserID(ctx, internship.IssuedBy)
+	if err != nil {
+		return fmt.Errorf("get recruiter profile: %w", err)
 	}
+	if recruiterProfile.Verification.Status != "verified" {
+		internship.Status = "pending"
+		internship.IsActive = false
+	}
+
 	if internship.StipendCurrency == "" {
 		internship.StipendCurrency = "NPR"
 	}
