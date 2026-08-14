@@ -22,7 +22,7 @@ func NewOrganizationVerificationRepository(
 	}
 }
 
-// employer submits/updates verification request
+// recruiter submits/updates verification request
 func (r *OrganizationVerificationRepository) Upsert(
 	ctx context.Context,
 	verification *models.OrganizationVerification,
@@ -31,7 +31,7 @@ func (r *OrganizationVerificationRepository) Upsert(
 		WithContext(ctx).
 		Clauses(clause.OnConflict{
 			Columns: []clause.Column{
-				{Name: "employer_profile_id"},
+				{Name: "recruiter_profile_id"},
 			},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"method",
@@ -53,19 +53,19 @@ func (r *OrganizationVerificationRepository) Upsert(
 		Error
 }
 
-// employer views own verification
-func (r *OrganizationVerificationRepository) GetByEmployerProfileID(
+// recruiter views own verification
+func (r *OrganizationVerificationRepository) GetByRecruiterProfileID(
 	ctx context.Context,
-	employerProfileID uuid.UUID,
+	recruiterProfileID uuid.UUID,
 ) (*models.OrganizationVerification, error) {
 
 	var verification models.OrganizationVerification
 
-	err := r.DB.
+	err := r.DB.Preload("RecruiterProfile").
 		WithContext(ctx).
 		Where(
-			"employer_profile_id = ?",
-			employerProfileID,
+			"recruiter_profile_id = ?",
+			recruiterProfileID,
 		).
 		First(&verification).
 		Error
@@ -106,8 +106,8 @@ func (r *OrganizationVerificationRepository) GetByID(
 
 	err := r.DB.
 		WithContext(ctx).
-		Preload("EmployerProfile").
-		Preload("EmployerProfile.User").
+		Preload("RecruiterProfile").
+		Preload("RecruiterProfile.User").
 		First(&verification, "id = ?", id).
 		Error
 
@@ -162,8 +162,8 @@ func (r *OrganizationVerificationRepository) GetPending(
 
 	err := r.DB.
 		WithContext(ctx).
-		Preload("EmployerProfile").
-		Preload("EmployerProfile.User").
+		Preload("RecruiterProfile").
+		Preload("RecruiterProfile.User").
 		Where(
 			"status = ?",
 			enums.OrganizationVerificationPending,
@@ -227,8 +227,8 @@ func (r *OrganizationVerificationRepository) GetByStatus(
 
 	query := r.DB.
 		WithContext(ctx).
-		Preload("EmployerProfile").
-		Preload("EmployerProfile.User").
+		Preload("RecruiterProfile").
+		Preload("RecruiterProfile.User").
 		Order("created_at DESC").
 		Limit(limit).
 		Offset(offset)
@@ -244,10 +244,10 @@ func (r *OrganizationVerificationRepository) GetByStatus(
 	return verifications, nil
 }
 
-func (r *OrganizationVerificationRepository) ExistsByEmployerProfileID(
+func (r *OrganizationVerificationRepository) ExistsByRecruiterProfileID(
 
 	ctx context.Context,
-	employerProfileID uuid.UUID,
+	recruiterProfileID uuid.UUID,
 ) (bool, error) {
 
 	var count int64
@@ -256,8 +256,8 @@ func (r *OrganizationVerificationRepository) ExistsByEmployerProfileID(
 		WithContext(ctx).
 		Model(&models.OrganizationVerification{}).
 		Where(
-			"employer_profile_id = ?",
-			employerProfileID,
+			"recruiter_profile_id = ?",
+			recruiterProfileID,
 		).
 		Count(&count).
 		Error
