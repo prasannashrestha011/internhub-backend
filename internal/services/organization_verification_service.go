@@ -29,20 +29,20 @@ var (
 const maxOrganizationVerificationDocumentSize = 10 * 1024 * 1024 // 10 MB
 
 type OrganizationVerificationService struct {
-	repo                *repositories.OrganizationVerificationRepository
-	employerProfileRepo *repositories.RecruiterProfileRepository
-	minioClient         *minio.Client
-	bucketName          string
+	repo                 *repositories.OrganizationVerificationRepository
+	recruiterProfileRepo *repositories.RecruiterProfileRepository
+	minioClient          *minio.Client
+	bucketName           string
 }
 
 func NewOrganizationVerificationService(
 	repo *repositories.OrganizationVerificationRepository,
-	employerProfileRepo *repositories.RecruiterProfileRepository,
+	recruiterProfileRepo *repositories.RecruiterProfileRepository,
 	minioClient *minio.Client,
 	bucketName string,
 ) *OrganizationVerificationService {
 	return &OrganizationVerificationService{
-		repo: repo, employerProfileRepo: employerProfileRepo,
+		repo: repo, recruiterProfileRepo: recruiterProfileRepo,
 		minioClient: minioClient, bucketName: bucketName,
 	}
 }
@@ -73,12 +73,12 @@ func (s *OrganizationVerificationService) Submit(
 		return nil, fmt.Errorf("check organization email verification: %w", err)
 	}
 
-	profile, err := s.employerProfileRepo.GetByUserID(ctx, userID)
+	recruiterProfile, err := s.recruiterProfileRepo.GetByUserID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("get employer profile: %w", err)
+		return nil, fmt.Errorf("get recruiter profile: %w", err)
 	}
 	var oldDocumentObjectKey string
-	if existing, err := s.repo.GetByEmployerProfileID(ctx, profile.ID); err == nil {
+	if existing, err := s.repo.GetByRecruiterProfileID(ctx, recruiterProfile.ID); err == nil {
 		oldDocumentObjectKey = existing.DocumentObjectKey
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, fmt.Errorf("get existing organization verification: %w", err)
@@ -87,7 +87,7 @@ func (s *OrganizationVerificationService) Submit(
 	now := time.Now().UTC()
 	verification := &models.OrganizationVerification{
 		ID:                 uuid.New(),
-		RecruiterProfileID: profile.ID,
+		RecruiterProfileID: recruiterProfile.ID,
 		Status:             enums.OrganizationVerificationPending,
 		OrganizationEmail:  organizationEmail,
 		EmailDomain:        address.Address[strings.Index(address.Address, "@")+1:],
@@ -98,8 +98,8 @@ func (s *OrganizationVerificationService) Submit(
 	if err := s.repo.Upsert(ctx, verification); err != nil {
 		return nil, fmt.Errorf("save organization verification: %w", err)
 	}
-	if err := s.employerProfileRepo.UpdateVerificationStatus(ctx, profile.ID, string(enums.OrganizationVerificationPending)); err != nil {
-		return nil, fmt.Errorf("update employer verification status: %w", err)
+	if err := s.recruiterProfileRepo.UpdateVerificationStatus(ctx, recruiterProfile.ID, string(enums.OrganizationVerificationPending)); err != nil {
+		return nil, fmt.Errorf("update recruiter verification status: %w", err)
 	}
 	if oldDocumentObjectKey != "" {
 		_ = s.minioClient.RemoveObject(ctx, s.bucketName, oldDocumentObjectKey, minio.RemoveObjectOptions{})
@@ -112,11 +112,11 @@ func (s *OrganizationVerificationService) GetMy(ctx context.Context, userID uuid
 	if userID == uuid.Nil {
 		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidOrganizationVerification)
 	}
-	profile, err := s.employerProfileRepo.GetByUserID(ctx, userID)
+	recruiterProfile, err := s.recruiterProfileRepo.GetByUserID(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("get employer profile: %w", err)
+		return nil, fmt.Errorf("get recruiter profile: %w", err)
 	}
-	verification, err := s.repo.GetByEmployerProfileID(ctx, profile.ID)
+	verification, err := s.repo.GetByRecruiterProfileID(ctx, recruiterProfile.ID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrOrganizationVerificationNotFound
 	}
