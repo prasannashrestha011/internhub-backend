@@ -81,7 +81,7 @@ func setupRoutes(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logge
 	authSvc := services.NewAuthService(userRepo, cfg, log)
 	studentSvc := services.NewStudentService(studentRepo, minioClient, cfg, log)
 	appSvc := services.NewApplicationService(appRepo, appHistoryRepo, minioClient, cfg, log)
-	internshipSvc := services.NewInternshipService(internshipRepo)
+	internshipSvc := services.NewInternshipService(internshipRepo, recruiterProfileRepo)
 	interviewSvc := services.NewInterviewService(interviewRepo, internshipRepo, appSvc)
 	recruiterProfileSvc := services.NewRecruiterProfileService(recruiterProfileRepo, minioClient, cfg.MinIO.ProfileBucket)
 	organizationVerificationSvc := services.NewOrganizationVerificationService(organizationVerificationRepo, recruiterProfileRepo, minioClient, cfg.MinIO.CompanyDocBucket)
