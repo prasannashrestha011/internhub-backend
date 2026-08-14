@@ -68,16 +68,14 @@ type Internship struct {
 	Status string `gorm:"size:30;default:draft;index" json:"status"`
 	// draft, published, closed, expired
 
-	IsActive bool `gorm:"default:true" json:"is_active"`
+	IsActive bool `json:"is_active"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (i *Internship) BeforeCreate(tx *gorm.DB) error {
-	if i.ID == uuid.Nil {
-		i.ID = uuid.New()
-	}
+	i.ID = uuid.New()
 
 	return nil
 }
