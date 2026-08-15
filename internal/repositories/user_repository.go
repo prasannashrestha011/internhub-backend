@@ -23,6 +23,25 @@ func (r *UserRepository) Create(user *models.User) error {
 	return r.DB.Create(user).Error
 }
 
+func (r *UserRepository) List(page, pageSize int) ([]models.User, int64, error) {
+	var users []models.User
+	var total int64
+
+	if err := r.DB.Model(&models.User{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset, limit := getPagination(page, pageSize)
+	err := r.DB.Model(&models.User{}).
+		Select("id, email, full_name, role, created_at").
+		Order("created_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&users).Error
+
+	return users, total, err
+}
+
 func (r *UserRepository) GetByEmail(email string) (*models.User, error) {
 	var u models.User
 	if err := r.DB.Where("email = ?", email).First(&u).Error; err != nil {
