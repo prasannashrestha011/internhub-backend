@@ -3,8 +3,6 @@ package handlers
 import (
 	"errors"
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -12,6 +10,7 @@ import (
 	"github.com/prasanna/student-job-portal/backend/internal/enums"
 	"github.com/prasanna/student-job-portal/backend/internal/logger"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
+	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 	"github.com/prasanna/student-job-portal/backend/internal/responses"
 	"github.com/prasanna/student-job-portal/backend/internal/services"
 )
@@ -88,14 +87,13 @@ func (h *OrganizationVerificationHandler) UploadDocument(c *gin.Context) {
 }
 
 func (h *OrganizationVerificationHandler) List(c *gin.Context) {
-	page, pageSize := parseVerificationPagination(c)
-	status := enums.OrganizationVerificationStatus(strings.ToLower(strings.TrimSpace(c.Query("status"))))
-	items, total, err := h.Svc.List(c.Request.Context(), status, page, pageSize)
+	filters := parseVerificationFilter(c)
+	items, total, err := h.Svc.List(c.Request.Context(), filters)
 	if err != nil {
 		h.respondError(c, err)
 		return
 	}
-	responses.SuccessWithPagination(c, http.StatusOK, "organization verifications retrieved successfully", items, responses.CalculatePagination(int64(page), int64(pageSize), total))
+	responses.SuccessWithPagination(c, http.StatusOK, "organization verifications retrieved successfully", items, responses.CalculatePagination(int64(filters.Page), int64(filters.PageSize), total))
 }
 
 func (h *OrganizationVerificationHandler) GetByID(c *gin.Context) {
@@ -149,6 +147,8 @@ func (h *OrganizationVerificationHandler) respondError(c *gin.Context, err error
 	switch {
 	case errors.Is(err, services.ErrOrganizationVerificationNotFound):
 		responses.Error(c, http.StatusNotFound, err.Error())
+	case errors.Is(err, services.ErrRecruiterProfileNotFound):
+		responses.Error(c, http.StatusNotFound, "recruiter profile not found")
 	case errors.Is(err, services.ErrOrganizationEmailAlreadyRegistered):
 		responses.Error(c, http.StatusConflict, err.Error())
 	case errors.Is(err, services.ErrInvalidOrganizationVerification), errors.Is(err, services.ErrInvalidVerificationState):
@@ -159,13 +159,8 @@ func (h *OrganizationVerificationHandler) respondError(c *gin.Context, err error
 	}
 }
 
-func parseVerificationPagination(c *gin.Context) (int, int) {
-	page, pageSize := 1, 10
-	if value, err := strconv.Atoi(c.Query("page")); err == nil && value > 0 {
-		page = value
-	}
-	if value, err := strconv.Atoi(c.Query("page_size")); err == nil && value > 0 && value <= 100 {
-		pageSize = value
-	}
-	return page, pageSize
+func parseVerificationFilter(c *gin.Context) repositories.VerificationSearchFilter {
+	page, pageSize := parsePagination(c)
+	f := repositories.VerificationSearchFilter{Status: enums.OrganizationVerificationStatus(c.Query("status")), Page: page, PageSize: pageSize}
+	return f
 }
