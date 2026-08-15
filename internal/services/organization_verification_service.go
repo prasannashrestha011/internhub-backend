@@ -74,6 +74,9 @@ func (s *OrganizationVerificationService) Submit(
 	}
 
 	recruiterProfile, err := s.recruiterProfileRepo.GetByUserID(ctx, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrRecruiterProfileNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get recruiter profile: %w", err)
 	}
@@ -113,6 +116,9 @@ func (s *OrganizationVerificationService) GetMy(ctx context.Context, userID uuid
 		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidOrganizationVerification)
 	}
 	recruiterProfile, err := s.recruiterProfileRepo.GetByUserID(ctx, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrRecruiterProfileNotFound
+	}
 	if err != nil {
 		return nil, fmt.Errorf("get recruiter profile: %w", err)
 	}
@@ -240,10 +246,11 @@ List retrieves a paginated list of organization verification requests filtered b
 The status can be "pending", "approved", or "rejected". If no status is provided, all requests are returned.
 The page and pageSize parameters control the pagination of the results.
 */
-func (s *OrganizationVerificationService) List(ctx context.Context, status enums.OrganizationVerificationStatus, page, pageSize int) ([]models.OrganizationVerification, int64, error) {
-	if status != "" && status != enums.OrganizationVerificationPending && status != enums.OrganizationVerificationApproved && status != enums.OrganizationVerificationRejected {
-		return nil, 0, fmt.Errorf("%w: invalid status", ErrInvalidOrganizationVerification)
-	}
+func (s *OrganizationVerificationService) List(ctx context.Context, filters repositories.VerificationSearchFilter) ([]models.OrganizationVerification, int64, error) {
+	status := filters.Status
+	page := filters.Page
+	pageSize := filters.PageSize
+
 	if page < 1 {
 		page = 1
 	}
