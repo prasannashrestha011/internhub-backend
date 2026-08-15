@@ -11,9 +11,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
+	"gorm.io/gorm"
 
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
+)
+
+var (
+	ErrInvalidRecruiterProfileData = errors.New("invalid recruiter profile data")
+	ErrRecruiterProfileNotFound    = errors.New("recruiter profile not found")
 )
 
 type RecruiterProfileService struct {
@@ -46,11 +52,11 @@ func (s *RecruiterProfileService) CreateOrUpdateProfile(
 	profile *models.RecruiterProfile,
 ) (*models.RecruiterProfile, error) {
 	if userID == uuid.Nil {
-		return nil, errors.New("invalid user id")
+		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidRecruiterProfileData)
 	}
 
 	if profile == nil {
-		return nil, errors.New("recruiter profile is required")
+		return nil, fmt.Errorf("%w: recruiter profile is required", ErrInvalidRecruiterProfileData)
 	}
 
 	profile.OrganizationName = strings.TrimSpace(profile.OrganizationName)
@@ -62,7 +68,7 @@ func (s *RecruiterProfileService) CreateOrUpdateProfile(
 	profile.OrganizationSize = strings.TrimSpace(profile.OrganizationSize)
 
 	if profile.OrganizationName == "" {
-		return nil, errors.New("organization name is required")
+		return nil, fmt.Errorf("%w: organization name is required", ErrInvalidRecruiterProfileData)
 	}
 
 	// Do not trust user_id coming from request body.
@@ -86,10 +92,13 @@ func (s *RecruiterProfileService) GetByUserID(
 	userID uuid.UUID,
 ) (*models.RecruiterProfile, error) {
 	if userID == uuid.Nil {
-		return nil, errors.New("invalid user id")
+		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidRecruiterProfileData)
 	}
 
 	user, err := s.repo.GetByUserID(ctx, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrRecruiterProfileNotFound
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -107,10 +116,14 @@ func (s *RecruiterProfileService) GetByID(
 	id uuid.UUID,
 ) (*models.RecruiterProfile, error) {
 	if id == uuid.Nil {
-		return nil, errors.New("invalid recruiter profile id")
+		return nil, fmt.Errorf("%w: invalid recruiter profile id", ErrInvalidRecruiterProfileData)
 	}
 
-	return s.repo.GetByID(ctx, id)
+	profile, err := s.repo.GetByID(ctx, id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrRecruiterProfileNotFound
+	}
+	return profile, err
 }
 
 // DeleteByUserID deletes an recruiter profile.
@@ -119,9 +132,11 @@ func (s *RecruiterProfileService) DeleteByUserID(
 	userID uuid.UUID,
 ) error {
 	if userID == uuid.Nil {
-		return errors.New("invalid user id")
+		return fmt.Errorf("%w: invalid user id", ErrInvalidRecruiterProfileData)
 	}
-
+	if _, err := s.GetByUserID(ctx, userID); err != nil {
+		return err
+	}
 	return s.repo.DeleteByUserID(ctx, userID)
 }
 
@@ -132,23 +147,26 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 ) (string, error) {
 
 	if userID == uuid.Nil {
-		return "", errors.New("invalid user id")
+		return "", fmt.Errorf("%w: invalid user id", ErrInvalidRecruiterProfileData)
 	}
 
 	if fileHeader == nil {
-		return "", errors.New("organization logo is required")
+		return "", fmt.Errorf("%w: organization logo is required", ErrInvalidRecruiterProfileData)
 	}
 
 	if fileHeader.Size <= 0 {
-		return "", errors.New("uploaded file is empty")
+		return "", fmt.Errorf("%w: uploaded file is empty", ErrInvalidRecruiterProfileData)
 	}
 
 	if fileHeader.Size > maxOrganizationLogoSize {
-		return "", errors.New("organization logo must be smaller than 5MB")
+		return "", fmt.Errorf("%w: organization logo must be smaller than 5MB", ErrInvalidRecruiterProfileData)
 	}
 
 	// Make sure recruiter profile exists.
 	profile, err := s.repo.GetByUserID(ctx, userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", ErrRecruiterProfileNotFound
+	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get recruiter profile: %w", err)
 	}
@@ -218,6 +236,7 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 			objectName,
 			minio.RemoveObjectOptions{},
 		)
+		return "", fmt.Errorf("update organization logo: %w", err)
 	}
 
 	// Remove previous logo after DB has successfully switched
@@ -275,8 +294,6 @@ func getImageExtension(contentType string) (string, error) {
 		return ".webp", nil
 
 	default:
-		return "", errors.New(
-			"unsupported image type; only JPEG, PNG and WEBP are allowed",
-		)
+		return "", fmt.Errorf("%w: unsupported image type; only JPEG, PNG and WEBP are allowed", ErrInvalidRecruiterProfileData)
 	}
 }
