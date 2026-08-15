@@ -20,20 +20,12 @@ func NewAdminHandler(repo *repositories.UserRepository, l *logger.Logger) *Admin
 
 // ListUsers returns a minimal list of users (id, email, full_name, role)
 func (h *AdminHandler) ListUsers(c *gin.Context) {
-	// For simplicity, fetch all users (in production use pagination)
-	var users []map[string]interface{}
-	rows, err := h.UserRepo.DB.Raw("SELECT id, email, full_name, role, created_at FROM users ORDER BY created_at DESC").Rows()
+	page, pageSize := parsePagination(c)
+
+	users, total, err := h.UserRepo.List(page, pageSize)
 	if err != nil {
 		responses.Error(c, http.StatusInternalServerError, "Failed to query users")
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, email, fullName, role string
-		var createdAt string
-		_ = rows.Scan(&id, &email, &fullName, &role, &createdAt)
-		users = append(users, map[string]interface{}{"id": id, "email": email, "full_name": fullName, "role": role, "created_at": createdAt})
-	}
-
-	responses.Success(c, http.StatusOK, "Users retrieved successfully", users)
+	responses.SuccessWithPagination(c, http.StatusOK, "users list", users, responses.CalculatePagination(int64(page), int64(pageSize), total))
 }
