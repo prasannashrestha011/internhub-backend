@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"log"
+	"errors"
 	"net/http"
 	"time"
 
@@ -40,10 +40,9 @@ func (h *StudentHandler) GetProfile(c *gin.Context) {
 		responses.Error(c, http.StatusUnauthorized, "invalid user id")
 		return
 	}
-	p, err := h.Repo.GetByUserID(userID)
-	log.Println("GetProfile: fetched profile:", p, "error:", err)
+	p, err := h.Svc.GetProfile(userID)
 	if err != nil {
-		responses.Error(c, http.StatusNotFound, "profile not found")
+		writeStudentError(c, err, "failed to fetch profile")
 		return
 	}
 	responses.Success(c, http.StatusOK, "profile fetched", p)
@@ -69,8 +68,8 @@ func (h *StudentHandler) UpsertProfile(c *gin.Context) {
 	}
 	payload.UserID = userID
 	payload.UpdatedAt = time.Now()
-	if err := h.Repo.CreateOrUpdateProfile(&payload); err != nil {
-		responses.Error(c, http.StatusInternalServerError, "failed to save profile")
+	if err := h.Svc.CreateOrUpdateProfile(&payload); err != nil {
+		writeStudentError(c, err, "failed to save profile")
 		return
 	}
 	responses.Success(c, http.StatusOK, "profile saved", payload)
@@ -90,9 +89,9 @@ func (h *StudentHandler) UploadDocument(c *gin.Context) {
 		return
 	}
 	// ensure profile exists
-	p, err := h.Repo.GetByUserID(userID)
+	p, err := h.Svc.GetProfile(userID)
 	if err != nil {
-		responses.Error(c, http.StatusNotFound, "profile not found")
+		writeStudentError(c, err, "failed to fetch profile")
 		return
 	}
 
@@ -104,8 +103,7 @@ func (h *StudentHandler) UploadDocument(c *gin.Context) {
 	// Upload to minio via service then persist metadata
 	objectKey, size, mimeType, err := h.Svc.UploadDocument(userID, p.ID, file)
 	if err != nil {
-		h.Log.Error("upload failed: %v", err)
-		responses.Error(c, http.StatusInternalServerError, "failed to upload")
+		writeStudentError(c, err, "failed to upload document")
 		return
 	}
 	doc := &models.StudentDocument{
@@ -117,8 +115,8 @@ func (h *StudentHandler) UploadDocument(c *gin.Context) {
 		Size:      size,
 		IsDefault: false,
 	}
-	if err := h.Repo.AddDocument(doc); err != nil {
-		responses.Error(c, http.StatusInternalServerError, "failed to save document metadata")
+	if err := h.Svc.AddDocument(doc); err != nil {
+		writeStudentError(c, err, "failed to save document metadata")
 		return
 	}
 	responses.Success(c, http.StatusCreated, "uploaded", doc)
@@ -137,14 +135,9 @@ func (h *StudentHandler) ListDocuments(c *gin.Context) {
 		responses.Error(c, http.StatusUnauthorized, "invalid user id")
 		return
 	}
-	p, err := h.Repo.GetByUserID(userID)
+	docs, err := h.Svc.ListDocuments(userID)
 	if err != nil {
-		responses.Error(c, http.StatusNotFound, "profile not found")
-		return
-	}
-	docs, err := h.Repo.ListDocuments(p.ID)
-	if err != nil {
-		responses.Error(c, http.StatusInternalServerError, "failed to list documents")
+		writeStudentError(c, err, "failed to list documents")
 		return
 	}
 	responses.Success(c, http.StatusOK, "documents", docs)
@@ -169,14 +162,8 @@ func (h *StudentHandler) SetDefaultDocument(c *gin.Context) {
 		responses.Error(c, http.StatusUnauthorized, "invalid user id")
 		return
 	}
-	// ensure profile exists
-	p, err := h.Repo.GetByUserID(userID)
-	if err != nil {
-		responses.Error(c, http.StatusNotFound, "profile not found")
-		return
-	}
-	if err := h.Repo.SetDefaultDocument(p.ID, docID); err != nil {
-		responses.Error(c, http.StatusInternalServerError, "failed to set default")
+	if err := h.Svc.SetDefaultDocument(userID, docID); err != nil {
+		writeStudentError(c, err, "failed to set default document")
 		return
 	}
 	responses.Success(c, http.StatusOK, "default set", nil)
@@ -190,12 +177,6 @@ func (h *StudentHandler) DeleteDocument(c *gin.Context) {
 		responses.Error(c, http.StatusBadRequest, "invalid document id")
 		return
 	}
-	// ensure ownership
-	doc, err := h.Repo.GetDocumentByID(docID)
-	if err != nil {
-		responses.Error(c, http.StatusNotFound, "document not found")
-		return
-	}
 	uid, ok := c.Get("user_id")
 	if !ok {
 		responses.Error(c, http.StatusUnauthorized, "missing user in context")
@@ -207,18 +188,22 @@ func (h *StudentHandler) DeleteDocument(c *gin.Context) {
 		responses.Error(c, http.StatusUnauthorized, "invalid user id")
 		return
 	}
-	if doc.UserID != userID {
-		responses.Error(c, http.StatusForbidden, "not allowed")
-		return
-	}
-	// delete object from storage
-	if err := h.Svc.DeleteDocument(doc.ObjectKey); err != nil {
-		// log and continue; we still attempt to remove DB record to keep state consistent
-		h.Log.Error("minio delete failed: %v", err)
-	}
-	if err := h.Repo.DeleteDocumentByID(doc.ID); err != nil {
-		responses.Error(c, http.StatusInternalServerError, "failed to delete document record")
+	if err := h.Svc.DeleteDocumentByUserID(userID, docID); err != nil {
+		writeStudentError(c, err, "failed to delete document")
 		return
 	}
 	responses.Success(c, http.StatusOK, "deleted", nil)
+}
+
+func writeStudentError(c *gin.Context, err error, fallback string) {
+	switch {
+	case errors.Is(err, services.ErrInvalidStudentData):
+		responses.Error(c, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrStudentProfileNotFound):
+		responses.Error(c, http.StatusNotFound, "profile not found")
+	case errors.Is(err, services.ErrStudentDocumentNotFound):
+		responses.Error(c, http.StatusNotFound, "document not found")
+	default:
+		responses.Error(c, http.StatusInternalServerError, fallback)
+	}
 }
