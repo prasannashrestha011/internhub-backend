@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -11,11 +12,18 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
+	"gorm.io/gorm"
 
 	"github.com/prasanna/student-job-portal/backend/internal/config"
 	"github.com/prasanna/student-job-portal/backend/internal/logger"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
+)
+
+var (
+	ErrInvalidStudentData      = errors.New("invalid student data")
+	ErrStudentProfileNotFound  = errors.New("student profile not found")
+	ErrStudentDocumentNotFound = errors.New("student document not found")
 )
 
 // StudentService provides student-related operations that use repositories and MinIO.
@@ -78,11 +86,35 @@ func (s *StudentService) CalculateProfileCompletion(profile *models.StudentProfi
 	return percent
 }
 
+func (s *StudentService) GetProfile(userID uuid.UUID) (*models.StudentProfile, error) {
+	if userID == uuid.Nil {
+		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidStudentData)
+	}
+	profile, err := s.repo.GetByUserID(userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrStudentProfileNotFound
+	}
+	return profile, err
+}
+
+func (s *StudentService) CreateOrUpdateProfile(profile *models.StudentProfile) error {
+	if profile == nil || profile.UserID == uuid.Nil {
+		return fmt.Errorf("%w: profile and user id are required", ErrInvalidStudentData)
+	}
+	return s.repo.CreateOrUpdateProfile(profile)
+}
+
 // UploadDocument uploads the provided multipart file header to MinIO under the configured
 // student documents bucket. Returns the object key, size in bytes, detected mime type and error.
 func (s *StudentService) UploadDocument(userID, profileID uuid.UUID, fileHeader *multipart.FileHeader) (string, int64, string, error) {
+	if userID == uuid.Nil || profileID == uuid.Nil {
+		return "", 0, "", fmt.Errorf("%w: user id and profile id are required", ErrInvalidStudentData)
+	}
 	if fileHeader == nil {
-		return "", 0, "", fmt.Errorf("file header is nil")
+		return "", 0, "", fmt.Errorf("%w: file is required", ErrInvalidStudentData)
+	}
+	if fileHeader.Size <= 0 {
+		return "", 0, "", fmt.Errorf("%w: uploaded file is empty", ErrInvalidStudentData)
 	}
 
 	f, err := fileHeader.Open()
@@ -126,10 +158,70 @@ func (s *StudentService) UploadDocument(userID, profileID uuid.UUID, fileHeader 
 	return objectKey, info.Size, contentType, nil
 }
 
+func (s *StudentService) AddDocument(document *models.StudentDocument) error {
+	if document == nil || document.UserID == uuid.Nil || document.ProfileID == uuid.Nil || document.ObjectKey == "" {
+		return fmt.Errorf("%w: complete document metadata is required", ErrInvalidStudentData)
+	}
+	return s.repo.AddDocument(document)
+}
+
+func (s *StudentService) ListDocuments(userID uuid.UUID) ([]models.StudentDocument, error) {
+	profile, err := s.GetProfile(userID)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.ListDocuments(profile.ID)
+}
+
+func (s *StudentService) SetDefaultDocument(userID, documentID uuid.UUID) error {
+	if documentID == uuid.Nil {
+		return fmt.Errorf("%w: invalid document id", ErrInvalidStudentData)
+	}
+	profile, err := s.GetProfile(userID)
+	if err != nil {
+		return err
+	}
+	document, err := s.getDocument(documentID)
+	if err != nil {
+		return err
+	}
+	if document.ProfileID != profile.ID {
+		return ErrStudentDocumentNotFound
+	}
+	return s.repo.SetDefaultDocument(profile.ID, documentID)
+}
+
+func (s *StudentService) DeleteDocumentByUserID(userID, documentID uuid.UUID) error {
+	if userID == uuid.Nil || documentID == uuid.Nil {
+		return fmt.Errorf("%w: user id and document id are required", ErrInvalidStudentData)
+	}
+	document, err := s.getDocument(documentID)
+	if err != nil {
+		return err
+	}
+	if document.UserID != userID {
+		return ErrStudentDocumentNotFound
+	}
+	if err := s.DeleteDocument(document.ObjectKey); err != nil {
+		// Preserve the prior behavior: a storage cleanup failure must not leave
+		// inaccessible document metadata behind.
+		s.l.Error("failed to delete student document from storage: %v", err)
+	}
+	return s.repo.DeleteDocumentByID(document.ID)
+}
+
+func (s *StudentService) getDocument(id uuid.UUID) (*models.StudentDocument, error) {
+	document, err := s.repo.GetDocumentByID(id)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrStudentDocumentNotFound
+	}
+	return document, err
+}
+
 // DeleteDocument removes the object identified by objectKey from the student documents bucket.
 func (s *StudentService) DeleteDocument(objectKey string) error {
 	if objectKey == "" {
-		return fmt.Errorf("object key is empty")
+		return fmt.Errorf("%w: object key is required", ErrInvalidStudentData)
 	}
 	ctx := context.Background()
 	bucket := s.cfg.MinIO.StudentDocBucket
