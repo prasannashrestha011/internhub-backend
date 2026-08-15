@@ -6,6 +6,9 @@ const (
 	OrganizationVerificationPending  OrganizationVerificationStatus = "pending"
 	OrganizationVerificationApproved OrganizationVerificationStatus = "approved"
 	OrganizationVerificationRejected OrganizationVerificationStatus = "rejected"
+
+	//for reviewed verifications, which are either approved or rejected
+	OrganizationVerificationReviewed OrganizationVerificationStatus = "reviewed"
 )
 
 type OrganizationVerificationMethod string

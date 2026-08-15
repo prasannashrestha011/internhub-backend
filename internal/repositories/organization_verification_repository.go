@@ -22,6 +22,12 @@ func NewOrganizationVerificationRepository(
 	}
 }
 
+type VerificationSearchFilter struct {
+	Status   enums.OrganizationVerificationStatus
+	Page     int
+	PageSize int
+}
+
 // recruiter submits/updates verification request
 func (r *OrganizationVerificationRepository) Upsert(
 	ctx context.Context,
@@ -222,9 +228,7 @@ func (r *OrganizationVerificationRepository) GetByStatus(
 	limit int,
 	offset int,
 ) ([]models.OrganizationVerification, error) {
-
 	var verifications []models.OrganizationVerification
-
 	query := r.DB.
 		WithContext(ctx).
 		Preload("RecruiterProfile").
@@ -233,14 +237,22 @@ func (r *OrganizationVerificationRepository) GetByStatus(
 		Limit(limit).
 		Offset(offset)
 
-	if status != "" {
+	switch status {
+	case "":
+		// no filter — all statuses
+	case enums.OrganizationVerificationReviewed:
+		query = query.Where(
+			"status IN (?, ?)",
+			enums.OrganizationVerificationApproved,
+			enums.OrganizationVerificationRejected,
+		)
+	default:
 		query = query.Where("status = ?", status)
 	}
 
 	if err := query.Find(&verifications).Error; err != nil {
 		return nil, err
 	}
-
 	return verifications, nil
 }
 
