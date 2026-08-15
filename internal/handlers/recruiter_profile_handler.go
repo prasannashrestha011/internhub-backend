@@ -43,6 +43,10 @@ func (h *RecruiterProfileHandler) GetMyProfile(c *gin.Context) {
 
 	profile, err := h.Svc.GetByUserID(c.Request.Context(), userID)
 	if err != nil {
+		if errors.Is(err, services.ErrRecruiterProfileNotFound) {
+			responses.Error(c, http.StatusNotFound, "recruiter profile not found")
+			return
+		}
 		h.Log.Error(
 			"failed to get recruiter profile for user %s: %v",
 			userID,
@@ -91,6 +95,9 @@ func (h *RecruiterProfileHandler) UpsertMyProfile(c *gin.Context) {
 
 	profile, err := h.Svc.CreateOrUpdateProfile(c.Request.Context(), userID, &input)
 	if err != nil {
+		if writeRecruiterProfileError(c, err, "failed to save recruiter profile") {
+			return
+		}
 		h.Log.Error(
 			"failed to upsert recruiter profile for user %s: %v",
 			userID,
@@ -127,6 +134,9 @@ func (h *RecruiterProfileHandler) DeleteMyProfile(c *gin.Context) {
 	}
 
 	if err := h.Svc.DeleteByUserID(c.Request.Context(), userID); err != nil {
+		if writeRecruiterProfileError(c, err, "failed to delete recruiter profile") {
+			return
+		}
 		h.Log.Error(
 			"failed to delete recruiter profile for user %s: %v",
 			userID,
@@ -186,14 +196,11 @@ func (h *RecruiterProfileHandler) UploadOrganizationLogo(c *gin.Context) {
 		return
 	}
 
-	// Example validation
-	if file.Size > 5*1024*1024 {
-		responses.Error(c, http.StatusBadRequest, "logo must be smaller than 5MB")
-		return
-	}
-
 	logoURL, err := h.Svc.UploadOrganizationLogo(c.Request.Context(), userID, file)
 	if err != nil {
+		if writeRecruiterProfileError(c, err, "failed to upload organization logo") {
+			return
+		}
 		h.Log.Error(
 			"failed to upload organization logo for user %s: %v",
 			userID,
@@ -216,4 +223,18 @@ func (h *RecruiterProfileHandler) UploadOrganizationLogo(c *gin.Context) {
 			"organization_logo": logoURL,
 		},
 	)
+}
+
+// writeRecruiterProfileError maps expected service errors to HTTP responses.
+// It returns true when it has written a response.
+func writeRecruiterProfileError(c *gin.Context, err error, fallback string) bool {
+	switch {
+	case errors.Is(err, services.ErrInvalidRecruiterProfileData):
+		responses.Error(c, http.StatusBadRequest, err.Error())
+	case errors.Is(err, services.ErrRecruiterProfileNotFound):
+		responses.Error(c, http.StatusNotFound, "recruiter profile not found")
+	default:
+		return false
+	}
+	return true
 }
