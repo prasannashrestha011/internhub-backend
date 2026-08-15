@@ -133,7 +133,7 @@ func (h *InternshipHandler) ListMyInternships(c *gin.Context) {
 		responses.Error(c, http.StatusUnauthorized, "invalid user context")
 		return
 	}
-	page, pageSize := parseInternshipPagination(c)
+	page, pageSize := parsePagination(c)
 	internships, total, err := h.service.ListByEmployer(c.Request.Context(), userID, page, pageSize)
 	if err != nil {
 		responses.Error(c, http.StatusInternalServerError, "failed to fetch internships")
@@ -164,7 +164,7 @@ func writeInternshipError(c *gin.Context, err error, fallback string) {
 	}
 }
 func parseInternshipSearchFilter(c *gin.Context) repositories.InternshipSearchFilter {
-	page, pageSize := parseInternshipPagination(c)
+	page, pageSize := parsePagination(c)
 	f := repositories.InternshipSearchFilter{Query: c.Query("q"), Location: c.Query("location"), WorkMode: c.Query("work_mode"), InternshipType: c.Query("internship_type"), Status: c.Query("status"), Page: page, PageSize: pageSize}
 	if id, err := uuid.Parse(c.Query("employer_id")); err == nil {
 		f.EmployerID = &id
@@ -183,14 +183,4 @@ func parseInternshipSearchFilter(c *gin.Context) repositories.InternshipSearchFi
 		f.ExcludeExpired, _ = strconv.ParseBool(value)
 	}
 	return f
-}
-func parseInternshipPagination(c *gin.Context) (int, int) {
-	page, pageSize := 1, 10
-	if n, err := strconv.Atoi(c.Query("page")); err == nil && n > 0 {
-		page = n
-	}
-	if n, err := strconv.Atoi(c.Query("page_size")); err == nil && n > 0 && n <= 100 {
-		pageSize = n
-	}
-	return page, pageSize
 }
