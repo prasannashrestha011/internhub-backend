@@ -11,7 +11,8 @@ type Internship struct {
 	ID uuid.UUID `gorm:"type:uuid;primaryKey" json:"id"`
 
 	// Employer who posted the internship
-	IssuedBy uuid.UUID `gorm:"type:uuid;index;not null" json:"issued_by"`
+	IssuedBy uuid.UUID        `gorm:"type:uuid;index;not null" json:"issued_by"`
+	Issuer   RecruiterProfile `gorm:"foreignKey:IssuedBy;references:UserID" json:"issuer"`
 
 	// Basic Information
 	Title       string `gorm:"size:255;not null" json:"title"`
