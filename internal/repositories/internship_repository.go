@@ -78,12 +78,17 @@ func (r *InternshipRepository) ListByEmployer(ctx context.Context, employerID uu
 	return internships, total, err
 }
 
-// Search executes advanced dynamic filtering and pagination for internships.
+/*
+Search executes advanced dynamic filtering and pagination for internships.
+It ensures that only internships from approved recruiters are returned.
+*/
 func (r *InternshipRepository) Search(ctx context.Context, filter InternshipSearchFilter) ([]models.Internship, int64, error) {
 	var internships []models.Internship
 	var total int64
 
-	query := r.db.WithContext(ctx).Model(&models.Internship{})
+	query := r.db.WithContext(ctx).Model(&models.Internship{}).
+		Joins("JOIN recruiter_profiles ON recruiter_profiles.user_id = internships.issued_by").
+		Where("recruiter_profiles.verification_status = ?", "approved")
 
 	if filter.Query != "" {
 		like := "%" + filter.Query + "%"
@@ -128,7 +133,7 @@ func (r *InternshipRepository) Search(ctx context.Context, filter InternshipSear
 
 	off, limit := getPagination(filter.Page, filter.PageSize)
 
-	err := query.Order("created_at DESC").
+	err := query.Preload("Issuer").Order("created_at DESC").
 		Offset(off).
 		Limit(limit).
 		Find(&internships).Error
