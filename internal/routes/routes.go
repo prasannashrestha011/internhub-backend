@@ -99,9 +99,11 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	me.GET("/interviews", interviewHandler.ListStudent)
 	me.POST("/interviews/:id/respond", interviewHandler.Respond)
 
+	/* public routes*/
 	internships := v1.Group("/internships")
 	internships.GET("", internshipHandler.SearchInternships)
 	internships.GET("/:id", internshipHandler.GetInternship)
+
 	studentInternships := v1.Group("/internships")
 	studentInternships.Use(middleware.JWTAuthMiddleware(cfg, log), middleware.RequireRoles(models.RoleStudent))
 	studentInternships.POST("/:internship_id/apply", appHandler.Apply)
