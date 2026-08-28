@@ -48,6 +48,23 @@ func (h *StudentHandler) GetProfile(c *gin.Context) {
 	responses.Success(c, http.StatusOK, "profile fetched", p)
 }
 
+// GetApplicationStats returns application metrics for the current student's dashboard.
+func (h *StudentHandler) GetApplicationStats(c *gin.Context) {
+	profileID, ok := getProfileID(c)
+	if !ok {
+		responses.Error(c, http.StatusUnauthorized, "invalid student profile context")
+		return
+	}
+
+	stats, err := h.Svc.GetApplicationStats(c.Request.Context(), profileID)
+	if err != nil {
+		writeStudentError(c, err, "failed to fetch application stats")
+		return
+	}
+
+	responses.Success(c, http.StatusOK, "student application stats fetched", stats)
+}
+
 // UpsertProfile creates or updates the student's profile
 func (h *StudentHandler) UpsertProfile(c *gin.Context) {
 	uid, ok := c.Get("user_id")

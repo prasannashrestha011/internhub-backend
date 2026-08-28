@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/prasanna/student-job-portal/backend/internal/enums"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 )
@@ -41,10 +42,16 @@ func (s *InternshipService) CreateInternship(ctx context.Context, internship *mo
 	if err != nil {
 		return fmt.Errorf("get recruiter profile: %w", err)
 	}
-	if recruiterProfile.Verification.Status != "verified" {
-		internship.Status = "pending"
-		internship.IsActive = false
+	if internship.Status == "" {
+		internship.Status = enums.InternshipStatusPrivate
 	}
+	if !internship.Status.IsValid() {
+		return fmt.Errorf("%w: invalid internship status", ErrInvalidInternshipData)
+	}
+	if recruiterProfile.VerificationStatus != string(enums.OrganizationVerificationApproved) {
+		internship.Status = enums.InternshipStatusPrivate
+	}
+	internship.IsActive = internship.Status.IsActive()
 
 	if internship.StipendCurrency == "" {
 		internship.StipendCurrency = "NPR"
@@ -67,8 +74,22 @@ func (s *InternshipService) UpdateInternship(ctx context.Context, internship *mo
 	if err != nil {
 		return err
 	}
+	recruiterProfile, err := s.recruiterRepo.GetByUserID(ctx, existing.IssuedBy)
+	if err != nil {
+		return fmt.Errorf("get recruiter profile: %w", err)
+	}
 	internship.IssuedBy = existing.IssuedBy
 	internship.CreatedAt = existing.CreatedAt
+	if internship.Status == "" {
+		internship.Status = existing.Status
+	}
+	if !internship.Status.IsValid() {
+		return fmt.Errorf("%w: invalid internship status", ErrInvalidInternshipData)
+	}
+	if recruiterProfile.VerificationStatus != string(enums.OrganizationVerificationApproved) {
+		internship.Status = enums.InternshipStatusPrivate
+	}
+	internship.IsActive = internship.Status.IsActive()
 	return s.repo.Update(ctx, internship)
 }
 
@@ -101,6 +122,9 @@ func (s *InternshipService) ListByEmployer(ctx context.Context, employerID uuid.
 }
 
 func (s *InternshipService) SearchInternships(ctx context.Context, filter repositories.InternshipSearchFilter) ([]models.Internship, int64, error) {
+	filter.Status = enums.InternshipStatusPublished
+	isActive := true
+	filter.IsActive = &isActive
 	return s.repo.Search(ctx, filter)
 }
 

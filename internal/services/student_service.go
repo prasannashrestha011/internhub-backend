@@ -35,7 +35,12 @@ type StudentService struct {
 }
 
 // NewStudentService constructs a new StudentService.
-func NewStudentService(repo *repositories.StudentRepository, minioClient *minio.Client, cfg *config.Config, l *logger.Logger) *StudentService {
+func NewStudentService(
+	repo *repositories.StudentRepository,
+	minioClient *minio.Client,
+	cfg *config.Config,
+	l *logger.Logger,
+) *StudentService {
 	return &StudentService{repo: repo, minioClient: minioClient, cfg: cfg, l: l}
 }
 
@@ -95,6 +100,17 @@ func (s *StudentService) GetProfile(userID uuid.UUID) (*models.StudentProfile, e
 		return nil, ErrStudentProfileNotFound
 	}
 	return profile, err
+}
+
+func (s *StudentService) GetApplicationStats(
+	ctx context.Context,
+	profileID uuid.UUID,
+) (*repositories.StudentApplicationStats, error) {
+	if profileID == uuid.Nil {
+		return nil, fmt.Errorf("%w: invalid student profile id", ErrInvalidStudentData)
+	}
+
+	return s.repo.GetApplicationStats(ctx, profileID)
 }
 
 func (s *StudentService) CreateOrUpdateProfile(profile *models.StudentProfile) error {

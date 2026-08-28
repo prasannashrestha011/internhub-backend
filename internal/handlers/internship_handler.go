@@ -8,6 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/prasanna/student-job-portal/backend/internal/enums"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 	"github.com/prasanna/student-job-portal/backend/internal/responses"
@@ -87,7 +88,7 @@ func (h *InternshipHandler) UpdateInternship(c *gin.Context) {
 		responses.Error(c, http.StatusForbidden, "not allowed")
 		return
 	}
-	var internship models.Internship
+	internship := *existing
 	if err := c.ShouldBindJSON(&internship); err != nil {
 		responses.Error(c, http.StatusBadRequest, "invalid request payload: "+err.Error())
 		return
@@ -165,7 +166,7 @@ func writeInternshipError(c *gin.Context, err error, fallback string) {
 }
 func parseInternshipSearchFilter(c *gin.Context) repositories.InternshipSearchFilter {
 	page, pageSize := parsePagination(c)
-	f := repositories.InternshipSearchFilter{Query: c.Query("q"), Location: c.Query("location"), WorkMode: c.Query("work_mode"), InternshipType: c.Query("internship_type"), Status: c.Query("status"), Page: page, PageSize: pageSize}
+	f := repositories.InternshipSearchFilter{Query: c.Query("q"), Location: c.Query("location"), WorkMode: c.Query("work_mode"), InternshipType: c.Query("internship_type"), Status: enums.InternshipStatus(c.Query("status")), Page: page, PageSize: pageSize}
 	if id, err := uuid.Parse(c.Query("employer_id")); err == nil {
 		f.EmployerID = &id
 	}

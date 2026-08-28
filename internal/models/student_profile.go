@@ -10,7 +10,7 @@ import (
 // StudentProfile holds extended profile information for student users
 type StudentProfile struct {
 	ID                       uuid.UUID      `gorm:"type:uuid;primaryKey" json:"id"`
-	UserID                   uuid.UUID      `gorm:"type:uuid;index;not null" json:"user_id"`
+	UserID                   uuid.UUID      `gorm:"type:uuid;uniqueIndex;not null"`
 	FullName                 string         `gorm:"size:255" json:"full_name"`
 	Phone                    string         `gorm:"size:50" json:"phone"`
 	Location                 string         `gorm:"size:255" json:"location"`
@@ -34,6 +34,8 @@ type StudentProfile struct {
 	CreatedAt                time.Time      `json:"created_at"`
 	UpdatedAt                time.Time      `json:"updated_at"`
 	DeletedAt                gorm.DeletedAt `gorm:"index" json:"-"`
+
+	Documents []StudentDocument `gorm:"foreignKey:ProfileID;references:ID" json:"documents,omitempty"`
 }
 
 func (s *StudentProfile) BeforeCreate(tx *gorm.DB) (err error) {

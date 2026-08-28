@@ -1,6 +1,8 @@
 package repositories
 
 import (
+	"context"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
@@ -11,16 +13,83 @@ type StudentRepository struct {
 	DB *gorm.DB
 }
 
+// StudentApplicationStats is the dashboard-facing summary of a student's
+// internship applications. Active applications are all non-final applications
+// (submitted, reviewing, or shortlisted), while pending applications are those
+// that have only been submitted.
+type StudentApplicationStats struct {
+	TotalApplications       int64 `json:"total_applications"`
+	ActiveApplications      int64 `json:"active_applications"`
+	ApprovedApplications    int64 `json:"approved_applications"`
+	RejectedApplications    int64 `json:"rejected_applications"`
+	PendingApplications     int64 `json:"pending_applications"`
+	UnderReviewApplications int64 `json:"under_review_applications"`
+	ShortlistedApplications int64 `json:"shortlisted_applications"`
+	WithdrawnApplications   int64 `json:"withdrawn_applications"`
+}
+
 func NewStudentRepository(db *gorm.DB) *StudentRepository {
 	return &StudentRepository{DB: db}
 }
 
+func (r *StudentRepository) ResolveProfileID(
+	userID uuid.UUID,
+) (uuid.UUID, error) {
+	var profile models.StudentProfile
+
+	if err := r.DB.
+		Where("user_id = ?", userID).
+		First(&profile).Error; err != nil {
+		return uuid.Nil, err
+	}
+
+	return profile.ID, nil
+}
 func (r *StudentRepository) GetByUserID(userID uuid.UUID) (*models.StudentProfile, error) {
 	var p models.StudentProfile
 	if err := r.DB.Where("user_id = ?", userID).First(&p).Error; err != nil {
 		return nil, err
 	}
 	return &p, nil
+}
+
+func (r *StudentRepository) GetApplicationStats(
+	ctx context.Context,
+	profileID uuid.UUID,
+) (*StudentApplicationStats, error) {
+	var stats StudentApplicationStats
+
+	err := r.DB.
+		WithContext(ctx).
+		Model(&models.InternshipApplication{}).
+		Where("student_id = ?", profileID).
+		Select(`
+			COUNT(*) AS total_applications,
+			COALESCE(SUM(CASE WHEN status IN (?, ?, ?) THEN 1 ELSE 0 END), 0) AS active_applications,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS approved_applications,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS rejected_applications,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS pending_applications,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS under_review_applications,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS shortlisted_applications,
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS withdrawn_applications
+		`,
+			models.ApplicationStatusSubmitted,
+			models.ApplicationStatusReviewing,
+			models.ApplicationStatusShortlisted,
+			models.ApplicationStatusAccepted,
+			models.ApplicationStatusRejected,
+			models.ApplicationStatusSubmitted,
+			models.ApplicationStatusReviewing,
+			models.ApplicationStatusShortlisted,
+			models.ApplicationStatusWithdrawn,
+		).
+		Scan(&stats).
+		Error
+	if err != nil {
+		return nil, err
+	}
+
+	return &stats, nil
 }
 
 func (r *StudentRepository) CreateOrUpdateProfile(p *models.StudentProfile) error {

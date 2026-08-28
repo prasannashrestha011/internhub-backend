@@ -1,48 +1,167 @@
 package repositories
 
 import (
+	"context"
+	"strings"
+
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 )
 
-type JobApplicationRepository struct {
-	DB *gorm.DB
+type InternshipApplicationRepository struct {
+	db *gorm.DB
 }
 
-func NewJobApplicationRepository(db *gorm.DB) *JobApplicationRepository {
-	return &JobApplicationRepository{DB: db}
+// RecruiterApplicationFilter scopes application results to one employer and
+// optionally narrows them by candidate name, internship, or status.
+type RecruiterApplicationFilter struct {
+	EmployerID   uuid.UUID
+	Query        string
+	InternshipID *uuid.UUID
+	Status       models.InternshipApplicationStatus
+	Page         int
+	PageSize     int
 }
 
-func (r *JobApplicationRepository) Create(a *models.JobApplication) error {
-	return r.DB.Create(a).Error
+// StudentApplicationFilter scopes application results to one student and can
+// optionally match one or more workflow statuses.
+type StudentApplicationFilter struct {
+	StudentID uuid.UUID
+	Statuses  []models.InternshipApplicationStatus
+	Page      int
+	PageSize  int
 }
 
-func (r *JobApplicationRepository) GetByID(id uuid.UUID) (*models.JobApplication, error) {
-	var out models.JobApplication
-	if err := r.DB.First(&out, "id = ?", id).Error; err != nil {
+func NewInternshipApplicationRepository(db *gorm.DB) *InternshipApplicationRepository {
+	return &InternshipApplicationRepository{db: db}
+}
+
+func (r *InternshipApplicationRepository) Create(ctx context.Context, a *models.InternshipApplication) error {
+	return r.db.WithContext(ctx).Create(a).Error
+}
+
+func (r *InternshipApplicationRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.InternshipApplication, error) {
+	var out models.InternshipApplication
+	if err := r.db.WithContext(ctx).
+		Preload("Internship").
+		Preload("Student").
+		Preload("Student.Documents", "is_default = ?", true).
+		First(&out, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
 	return &out, nil
 }
 
-func (r *JobApplicationRepository) ListByStudent(studentID uuid.UUID) ([]models.JobApplication, error) {
-	var out []models.JobApplication
-	if err := r.DB.Where("student_id = ?", studentID).Find(&out).Error; err != nil {
+func (r *InternshipApplicationRepository) GetByStudentAndInternship(ctx context.Context, studentID, internshipID uuid.UUID) (*models.InternshipApplication, error) {
+	var out models.InternshipApplication
+	if err := r.db.WithContext(ctx).
+		Where("student_id = ? AND internship_id = ?", studentID, internshipID).
+		First(&out).Error; err != nil {
 		return nil, err
 	}
-	return out, nil
+	return &out, nil
 }
 
-func (r *JobApplicationRepository) ListByJob(jobID uuid.UUID) ([]models.JobApplication, error) {
-	var out []models.JobApplication
-	if err := r.DB.Where("job_id = ?", jobID).Find(&out).Error; err != nil {
-		return nil, err
+func (r *InternshipApplicationRepository) ListByStudent(
+	ctx context.Context,
+	filter StudentApplicationFilter,
+) ([]models.InternshipApplication, int64, error) {
+	var out []models.InternshipApplication
+	var total int64
+
+	query := r.db.WithContext(ctx).
+		Model(&models.InternshipApplication{}).
+		Where("student_id = ?", filter.StudentID)
+
+	if len(filter.Statuses) > 0 {
+		query = query.Where("status IN ?", filter.Statuses)
 	}
-	return out, nil
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	off, limit := getPagination(filter.Page, filter.PageSize)
+	err := query.Preload("Internship").
+		Preload("Internship.Issuer").
+		Order("applied_at DESC").
+		Offset(off).
+		Limit(limit).
+		Find(&out).Error
+
+	return out, total, err
 }
 
-func (r *JobApplicationRepository) Update(a *models.JobApplication) error {
-	return r.DB.Save(a).Error
+func (r *InternshipApplicationRepository) ListByInternship(ctx context.Context, internshipID uuid.UUID, page, pageSize int) ([]models.InternshipApplication, int64, error) {
+	var out []models.InternshipApplication
+	var total int64
+
+	query := r.db.WithContext(ctx).
+		Model(&models.InternshipApplication{}).
+		Where("internship_id = ?", internshipID)
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	off, limit := getPagination(page, pageSize)
+	err := query.Preload("Student").
+		Preload("Student.Documents", "is_default = ?", true).
+		Order("applied_at DESC").
+		Offset(off).
+		Limit(limit).
+		Find(&out).Error
+
+	return out, total, err
+}
+
+// ListForEmployer returns only applications for internships issued by the
+// supplied employer. Ownership is enforced inside the database query so an
+// application from another employer can never enter the result set.
+func (r *InternshipApplicationRepository) ListForEmployer(
+	ctx context.Context,
+	filter RecruiterApplicationFilter,
+) ([]models.InternshipApplication, int64, error) {
+	var out []models.InternshipApplication
+	var total int64
+
+	query := r.db.WithContext(ctx).
+		Model(&models.InternshipApplication{}).
+		Joins("JOIN internships ON internships.id = internship_applications.internship_id").
+		Joins("JOIN student_profiles ON student_profiles.id = internship_applications.student_id").
+		Where("internships.issued_by = ?", filter.EmployerID)
+
+	if queryText := strings.TrimSpace(filter.Query); queryText != "" {
+		query = query.Where(
+			"LOWER(student_profiles.full_name) LIKE ?",
+			"%"+strings.ToLower(queryText)+"%",
+		)
+	}
+	if filter.InternshipID != nil {
+		query = query.Where("internship_applications.internship_id = ?", *filter.InternshipID)
+	}
+	if filter.Status != "" {
+		query = query.Where("internship_applications.status = ?", filter.Status)
+	}
+
+	if err := query.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset, limit := getPagination(filter.Page, filter.PageSize)
+	err := query.
+		Preload("Student").
+		Preload("Internship").
+		Order("internship_applications.applied_at DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&out).Error
+
+	return out, total, err
+}
+
+func (r *InternshipApplicationRepository) Update(ctx context.Context, a *models.InternshipApplication) error {
+	return r.db.WithContext(ctx).Save(a).Error
 }

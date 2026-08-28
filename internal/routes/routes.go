@@ -26,16 +26,14 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	recruiterProfileRepo := repositories.NewRecruiterProfileRepository(db)
 	organizationVerificationRepo := repositories.NewOrganizationVerificationRepository(db)
 	internshipRepo := repositories.NewInternshipRepository(db)
-	appRepo := repositories.NewJobApplicationRepository(db)
-	ansRepo := repositories.NewApplicationAnswerRepository(db)
-	appHistoryRepo := repositories.NewApplicationStatusHistoryRepository(db)
+	appRepo := repositories.NewInternshipApplicationRepository(db)
 	interviewRepo := repositories.NewInterviewRepository(db)
 
 	authSvc := services.NewAuthService(userRepo, cfg, log)
 	studentSvc := services.NewStudentService(studentRepo, minioClient, cfg, log)
-	appSvc := services.NewApplicationService(appRepo, appHistoryRepo, minioClient, cfg, log)
+	appSvc := services.NewInternshipApplicationService(appRepo, internshipRepo, studentRepo, minioClient, cfg.MinIO.StudentDocBucket)
 	internshipSvc := services.NewInternshipService(internshipRepo, recruiterProfileRepo)
-	interviewSvc := services.NewInterviewService(interviewRepo, internshipRepo, appSvc)
+	interviewSvc := services.NewInterviewService(interviewRepo)
 	recruiterProfileSvc := services.NewRecruiterProfileService(recruiterProfileRepo, minioClient, cfg.MinIO.ProfileBucket)
 	organizationVerificationSvc := services.NewOrganizationVerificationService(organizationVerificationRepo, recruiterProfileRepo, minioClient, cfg.MinIO.CompanyDocBucket)
 
@@ -45,7 +43,7 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	recruiterProfileHandler := handlers.NewRecruiterProfileHandler(recruiterProfileSvc, log)
 	organizationVerificationHandler := handlers.NewOrganizationVerificationHandler(organizationVerificationSvc, log)
 	internshipHandler := handlers.NewInternshipHandler(internshipSvc)
-	appHandler := handlers.NewApplicationHandler(appSvc, appRepo, internshipRepo, ansRepo, appHistoryRepo, log)
+	appHandler := handlers.NewApplicationHandler(appSvc, log)
 	interviewHandler := handlers.NewInterviewHandler(interviewSvc, interviewRepo, internshipRepo)
 
 	router.GET("/health", healthCheck)
@@ -80,6 +78,8 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	verification.GET("", organizationVerificationHandler.GetMyVerification)
 	verification.POST("", organizationVerificationHandler.SubmitVerification)
 	verification.POST("/document", organizationVerificationHandler.UploadDocument)
+	recruiterGroup.GET("/applications", appHandler.ListForRecruiter)
+	recruiterGroup.GET("/applications/:id", appHandler.GetForRecruiter)
 	recruiterGroup.PUT("/applications/:id/status", appHandler.UpdateStatus)
 	interviews := recruiterGroup.Group("/interviews")
 	interviews.POST("", interviewHandler.Schedule)
@@ -88,14 +88,18 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 
 	studentGroup := v1.Group("/students")
 	me := studentGroup.Group("/me")
-	me.Use(middleware.JWTAuthMiddleware(cfg, log), middleware.RequireRoles(models.RoleStudent))
+	me.Use(middleware.JWTAuthMiddleware(cfg, log), middleware.ResolveStudentProfileIDMiddleware(studentRepo, log), middleware.RequireRoles(models.RoleStudent))
+
 	me.GET("/profile", studentHandler.GetProfile)
+	me.GET("/stats", studentHandler.GetApplicationStats)
 	me.POST("/profile", studentHandler.UpsertProfile)
 	me.POST("/documents", studentHandler.UploadDocument)
 	me.GET("/documents", studentHandler.ListDocuments)
 	me.POST("/documents/:id/default", studentHandler.SetDefaultDocument)
 	me.DELETE("/documents/:id", studentHandler.DeleteDocument)
 	me.GET("/applications", appHandler.ListOwn)
+	me.GET("/applications/stats", studentHandler.GetApplicationStats)
+	me.PATCH("/applications/:id/withdraw", appHandler.Withdraw)
 	me.GET("/interviews", interviewHandler.ListStudent)
 	me.POST("/interviews/:id/respond", interviewHandler.Respond)
 
@@ -113,12 +117,8 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	recruiterInternships.POST("", internshipHandler.CreateInternship)
 	recruiterInternships.PUT("/:id", internshipHandler.UpdateInternship)
 	recruiterInternships.DELETE("/:id", internshipHandler.DeleteInternship)
-	recruiterInternships.GET("/:id/applications", appHandler.ListForJob)
+	recruiterInternships.GET("/:id/applications", appHandler.ListForInternship)
 
-	appsGroup := v1.Group("/applications")
-	appsGroup.Use(middleware.JWTAuthMiddleware(cfg, log))
-	appsGroup.GET("/:id/answers", appHandler.ListAnswers)
-	appsGroup.GET("/:id/history", appHandler.ListHistory)
 }
 
 func healthCheck(c *gin.Context) {

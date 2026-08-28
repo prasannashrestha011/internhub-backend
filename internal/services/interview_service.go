@@ -10,14 +10,11 @@ import (
 )
 
 type InterviewService struct {
-	Repo           *repositories.InterviewRepository
-	InternshipRepo *repositories.InternshipRepository
-	// use ApplicationService to perform status transitions so history gets recorded
-	AppSvc *ApplicationService
+	Repo *repositories.InterviewRepository
 }
 
-func NewInterviewService(repo *repositories.InterviewRepository, internshipRepo *repositories.InternshipRepository, appSvc *ApplicationService) *InterviewService {
-	return &InterviewService{Repo: repo, InternshipRepo: internshipRepo, AppSvc: appSvc}
+func NewInterviewService(repo *repositories.InterviewRepository) *InterviewService {
+	return &InterviewService{Repo: repo}
 }
 
 func (s *InterviewService) ScheduleInterview(i *models.Interview) error {
@@ -27,12 +24,6 @@ func (s *InterviewService) ScheduleInterview(i *models.Interview) error {
 	}
 	if err := s.Repo.Create(i); err != nil {
 		return err
-	}
-	// if interview is associated with an application, transition that application's status
-	if i.ApplicationID != uuid.Nil && s.AppSvc != nil {
-		if _, err := s.AppSvc.UpdateStatus(i.ApplicationID, "interview_scheduled"); err != nil {
-			return err
-		}
 	}
 	return nil
 }

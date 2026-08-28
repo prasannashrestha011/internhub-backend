@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/prasanna/student-job-portal/backend/internal/enums"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 )
 
@@ -25,7 +26,7 @@ type InternshipSearchFilter struct {
 	Location       string
 	WorkMode       string // onsite, remote, hybrid
 	InternshipType string // paid, unpaid
-	Status         string // draft, published, closed, expired
+	Status         enums.InternshipStatus
 	IsActive       *bool
 	MinStipend     *float64
 	ExcludeExpired bool
@@ -88,7 +89,7 @@ func (r *InternshipRepository) Search(ctx context.Context, filter InternshipSear
 
 	query := r.db.WithContext(ctx).Model(&models.Internship{}).
 		Joins("JOIN recruiter_profiles ON recruiter_profiles.user_id = internships.issued_by").
-		Where("recruiter_profiles.verification_status = ?", "approved")
+		Where("recruiter_profiles.verification_status = ?", enums.OrganizationVerificationApproved)
 
 	if filter.Query != "" {
 		like := "%" + filter.Query + "%"

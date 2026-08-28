@@ -73,9 +73,8 @@ func autoMigrate(db *gorm.DB) error {
 		&models.StudentCertification{},
 		&models.StudentDocument{},
 		&models.Internship{},
-		&models.JobApplication{},
+		&models.InternshipApplication{},
 		&models.Interview{},
-		&models.ApplicationStatusHistory{},
 		&models.RecruiterProfile{},
 		&models.OrganizationVerification{},
 	)

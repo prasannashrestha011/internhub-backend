@@ -5,6 +5,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/prasanna/student-job-portal/backend/internal/enums"
 )
 
 type Internship struct {
@@ -66,8 +68,7 @@ type Internship struct {
 	Benefits         string `gorm:"type:text" json:"benefits"`
 
 	// Status
-	Status string `gorm:"size:30;default:draft;index" json:"status"`
-	// draft, published, closed, expired
+	Status enums.InternshipStatus `gorm:"size:30;not null;index" json:"status"`
 
 	IsActive bool `json:"is_active"`
 
@@ -77,6 +78,9 @@ type Internship struct {
 
 func (i *Internship) BeforeCreate(tx *gorm.DB) error {
 	i.ID = uuid.New()
+	if i.Status == "" {
+		i.Status = enums.InternshipStatusPrivate
+	}
 
 	return nil
 }
