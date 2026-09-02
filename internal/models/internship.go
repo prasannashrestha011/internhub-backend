@@ -77,7 +77,9 @@ type Internship struct {
 }
 
 func (i *Internship) BeforeCreate(tx *gorm.DB) error {
-	i.ID = uuid.New()
+	if i.ID == uuid.Nil {
+		i.ID = uuid.New()
+	}
 	if i.Status == "" {
 		i.Status = enums.InternshipStatusPrivate
 	}

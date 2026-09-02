@@ -37,7 +37,7 @@ func main() {
 	}
 	defer database.Close(db)
 
-	if err := autoMigrate(db); err != nil {
+	if err := database.AutoMigrate(db); err != nil {
 		log.Fatal("AutoMigrate failed: %v", err)
 	}
 
@@ -61,24 +61,6 @@ func main() {
 // ============================================================================
 // INITIALIZATION HELPERS
 // ============================================================================
-
-func autoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(
-		&models.User{},
-		&models.RefreshToken{},
-		&models.StudentProfile{},
-		&models.StudentEducation{},
-		&models.StudentSkill{},
-		&models.StudentProject{},
-		&models.StudentCertification{},
-		&models.StudentDocument{},
-		&models.Internship{},
-		&models.InternshipApplication{},
-		&models.Interview{},
-		&models.RecruiterProfile{},
-		&models.OrganizationVerification{},
-	)
-}
 
 func seedAdminUser(db *gorm.DB, cfg *config.Config, log *logger.Logger) {
 	adminEmail := getenv("ADMIN_EMAIL", "")

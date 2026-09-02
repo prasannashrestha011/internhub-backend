@@ -1,4 +1,4 @@
-.PHONY: help build run test clean lint dev dev-down docker-up docker-down docker-logs fmt
+.PHONY: help build run test clean lint dev dev-down docker-up docker-down docker-logs fmt db-seed
 
 help:
 	@echo "Student Job Portal Backend - Makefile Commands"
@@ -17,6 +17,7 @@ help:
 	@echo "  make fmt              - Format code"
 	@echo "  make lint             - Run linter"
 	@echo "  make test             - Run tests"
+	@echo "  make db-seed          - Seed development users and portal data"
 	@echo ""
 	@echo "Build:"
 	@echo "  make build            - Build the application"
@@ -90,7 +91,7 @@ mod-tidy:
 
 deps: mod-download mod-tidy
 
-# Database (to be implemented)
+# Database
 db-migrate-up:
 	@echo "Running migrations..."
 	# migrate -path migrations -database "$$DATABASE_URL" up
@@ -101,4 +102,4 @@ db-migrate-down:
 
 db-seed:
 	@echo "Seeding database..."
-	# go run ./cmd/seed/main.go
+	go run ./cmd/seed
