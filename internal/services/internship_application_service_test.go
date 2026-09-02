@@ -267,6 +267,65 @@ func TestListByStudentFiltersAndMapsApplications(t *testing.T) {
 	}
 }
 
+func TestFindByStudentAndInternship(t *testing.T) {
+	db := openApplicationServiceTestDB(t)
+	employerID := uuid.New()
+	student := createServiceTestStudent(t, db, "Aarav Sharma")
+	internship := createServiceTestInternship(t, db, employerID, "Frontend Intern")
+	created := createServiceTestApplication(
+		t,
+		db,
+		internship.ID,
+		student.ID,
+		models.ApplicationStatusWithdrawn,
+		"",
+	)
+	service := newApplicationServiceForTest(db, nil)
+
+	found, err := service.FindByStudentAndInternship(context.Background(), student.UserID, internship.ID)
+	if err != nil {
+		t.Fatalf("find existing application: %v", err)
+	}
+	if found == nil || found.ID != created.ID || found.Status != models.ApplicationStatusWithdrawn {
+		t.Fatalf("application = %#v, want withdrawn application %s", found, created.ID)
+	}
+
+	notApplied, err := service.FindByStudentAndInternship(context.Background(), student.UserID, uuid.New())
+	if err != nil {
+		t.Fatalf("find missing application: %v", err)
+	}
+	if notApplied != nil {
+		t.Fatalf("missing application = %#v, want nil", notApplied)
+	}
+
+	if _, err := service.FindByStudentAndInternship(context.Background(), uuid.Nil, internship.ID); !errors.Is(err, ErrInvalidApplicationData) {
+		t.Fatalf("invalid lookup error = %v, want ErrInvalidApplicationData", err)
+	}
+}
+
+func TestCreateApplicationRejectsDuplicate(t *testing.T) {
+	db := openApplicationServiceTestDB(t)
+	student := createServiceTestStudent(t, db, "Maya Gurung")
+	internship := createServiceTestInternship(t, db, uuid.New(), "Backend Intern")
+	createServiceTestApplication(
+		t,
+		db,
+		internship.ID,
+		student.ID,
+		models.ApplicationStatusWithdrawn,
+		"",
+	)
+	service := newApplicationServiceForTest(db, nil)
+
+	err := service.CreateApplication(context.Background(), &models.InternshipApplication{
+		InternshipID: internship.ID,
+		StudentID:    student.UserID,
+	})
+	if !errors.Is(err, ErrAlreadyApplied) {
+		t.Fatalf("duplicate application error = %v, want ErrAlreadyApplied", err)
+	}
+}
+
 func openApplicationServiceTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := fmt.Sprintf("file:application-service-%s?mode=memory&cache=shared", uuid.NewString())

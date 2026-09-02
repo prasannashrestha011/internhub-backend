@@ -304,6 +304,36 @@ func (s *InternshipApplicationService) ListByStudent(
 	return mapStudentApplications(apps), total, nil
 }
 
+// FindByStudentAndInternship returns the authenticated student's application
+// for one internship. A nil result means the student has never applied.
+func (s *InternshipApplicationService) FindByStudentAndInternship(
+	ctx context.Context,
+	userID, internshipID uuid.UUID,
+) (*StudentApplicationSummary, error) {
+	if userID == uuid.Nil || internshipID == uuid.Nil {
+		return nil, fmt.Errorf("%w: valid user and internship IDs are required", ErrInvalidApplicationData)
+	}
+
+	studentID, err := s.studentRepo.ResolveProfileID(userID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("%w: student profile not found", ErrInvalidApplicationData)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("resolve student profile: %w", err)
+	}
+
+	application, err := s.repo.GetByStudentAndInternship(ctx, studentID, internshipID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("find student application: %w", err)
+	}
+
+	mapped := mapStudentApplications([]models.InternshipApplication{*application})
+	return &mapped[0], nil
+}
+
 func (s *InternshipApplicationService) ListByInternship(ctx context.Context, internshipID, employerID uuid.UUID, page, pageSize int) ([]RecruiterApplicationSummary, int64, error) {
 	return s.ListForRecruiter(ctx, employerID, RecruiterApplicationFilter{
 		InternshipID: &internshipID,

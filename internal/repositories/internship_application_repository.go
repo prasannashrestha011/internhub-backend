@@ -56,10 +56,15 @@ func (r *InternshipApplicationRepository) GetByID(ctx context.Context, id uuid.U
 
 func (r *InternshipApplicationRepository) GetByStudentAndInternship(ctx context.Context, studentID, internshipID uuid.UUID) (*models.InternshipApplication, error) {
 	var out models.InternshipApplication
-	if err := r.db.WithContext(ctx).
+	result := r.db.WithContext(ctx).
 		Where("student_id = ? AND internship_id = ?", studentID, internshipID).
-		First(&out).Error; err != nil {
-		return nil, err
+		Limit(1).
+		Find(&out)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
 	}
 	return &out, nil
 }

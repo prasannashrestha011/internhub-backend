@@ -88,6 +88,30 @@ func (h *ApplicationHandler) ListOwn(c *gin.Context) {
 	)
 }
 
+// FindOwnForInternship returns the current student's existing application for
+// an internship, or null when they have not applied.
+func (h *ApplicationHandler) FindOwnForInternship(c *gin.Context) {
+	uid, ok := getAuthenticatedUserID(c)
+	if !ok {
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
+		return
+	}
+
+	internshipID, err := uuid.Parse(c.Param("internship_id"))
+	if err != nil {
+		responses.Error(c, http.StatusBadRequest, "invalid internship id")
+		return
+	}
+
+	application, err := h.Svc.FindByStudentAndInternship(c.Request.Context(), uid, internshipID)
+	if err != nil {
+		h.handleApplicationError(c, err)
+		return
+	}
+
+	responses.Success(c, http.StatusOK, "application lookup completed", application)
+}
+
 // Withdraw allows a student to withdraw their own active application.
 func (h *ApplicationHandler) Withdraw(c *gin.Context) {
 	studentProfileID, ok := getProfileID(c)

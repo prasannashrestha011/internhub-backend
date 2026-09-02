@@ -98,6 +98,7 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	me.POST("/documents/:id/default", studentHandler.SetDefaultDocument)
 	me.DELETE("/documents/:id", studentHandler.DeleteDocument)
 	me.GET("/applications", appHandler.ListOwn)
+	me.GET("/applications/internships/:internship_id", appHandler.FindOwnForInternship)
 	me.GET("/applications/stats", studentHandler.GetApplicationStats)
 	me.PATCH("/applications/:id/withdraw", appHandler.Withdraw)
 	me.GET("/interviews", interviewHandler.ListStudent)
