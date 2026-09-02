@@ -316,7 +316,7 @@ Prepared for:
 - `student_educations`, `student_skills`, `student_projects`, `student_certifications` tables
 - `companies`, `employer_members` tables
 - `jobs`, `job_skills`, `job_questions` tables
-- `applications`, `application_answers`, `application_status_histories`, `interviews` tables
+- `applications` and `interviews` tables
 - `notifications`, `reports`, `admin_action_logs` tables
 
 **Status**: GORM ready for model definitions
@@ -695,4 +695,3 @@ docker-compose logs -f api
   - Calendar availability checks and collision detection
 
 **Phase 5 Last Updated**: 2026-08-05T19:14:24+05:45
-

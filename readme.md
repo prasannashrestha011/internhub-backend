@@ -542,8 +542,6 @@ job_questions
 saved_jobs
 
 applications
-application_answers
-application_status_histories
 interviews
 
 notifications
