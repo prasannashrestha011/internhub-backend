@@ -27,8 +27,20 @@ func TestRunCreatesAnIdempotentDevelopmentDataset(t *testing.T) {
 			t.Fatalf("seed run %d: %v", run, err)
 		}
 		if summary.Users != 6 || summary.StudentProfiles != 2 || summary.RecruiterProfiles != 3 ||
-			summary.OrganizationVerifications != 3 || summary.Internships != 6 || summary.Applications != 6 {
+			summary.OrganizationVerifications != 3 || summary.Internships != 100 || summary.Applications != 6 {
 			t.Fatalf("unexpected summary after run %d: %+v", run, summary)
+		}
+		if run == 1 {
+			var alternate models.Internship
+			if err := db.Where("title = ?", "Software Engineering Intern 01").First(&alternate).Error; err != nil {
+				t.Fatalf("load alternate internship: %v", err)
+			}
+			moved := db.Model(&models.InternshipApplication{}).
+				Where("status = ?", models.ApplicationStatusSubmitted).
+				Update("internship_id", alternate.ID)
+			if moved.Error != nil || moved.RowsAffected != 1 {
+				t.Fatalf("move seeded application: rows=%d error=%v", moved.RowsAffected, moved.Error)
+			}
 		}
 	}
 
@@ -36,7 +48,7 @@ func TestRunCreatesAnIdempotentDevelopmentDataset(t *testing.T) {
 	assertCount(t, db, &models.StudentProfile{}, 2)
 	assertCount(t, db, &models.RecruiterProfile{}, 3)
 	assertCount(t, db, &models.OrganizationVerification{}, 3)
-	assertCount(t, db, &models.Internship{}, 6)
+	assertCount(t, db, &models.Internship{}, 100)
 	assertCount(t, db, &models.InternshipApplication{}, 6)
 
 	var student models.User
@@ -68,8 +80,8 @@ func TestRunCreatesAnIdempotentDevelopmentDataset(t *testing.T) {
 		Count(&published).Error; err != nil {
 		t.Fatalf("count published internships: %v", err)
 	}
-	if published != 3 {
-		t.Fatalf("published internships = %d, want 3", published)
+	if published != 97 {
+		t.Fatalf("published internships = %d, want 97", published)
 	}
 }
 

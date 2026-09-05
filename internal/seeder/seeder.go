@@ -312,6 +312,46 @@ func seedInternships(tx *gorm.DB, users map[string]models.User) (map[string]mode
 		}
 		result[item.key] = internship
 	}
+
+	titles := []string{"Software Engineering", "Frontend Development", "Backend Development", "Mobile Development", "Data Analytics", "UI/UX Design", "Quality Assurance", "DevOps", "Digital Marketing", "Business Analysis"}
+	locations := []string{"Kathmandu, Nepal", "Lalitpur, Nepal", "Bhaktapur, Nepal", "Pokhara, Nepal", "Remote"}
+	workModes := []string{"onsite", "hybrid", "remote"}
+	for i := 1; i <= 94; i++ {
+		key := fmt.Sprintf("generated-%03d", i)
+		title := titles[(i-1)%len(titles)]
+		internship := models.Internship{
+			ID:                  seedID("internship", key),
+			IssuedBy:            approvedEmployer,
+			Title:               fmt.Sprintf("%s Intern %02d", title, i),
+			Description:         fmt.Sprintf("Gain practical %s experience while working with an experienced team on real projects.", title),
+			Location:            locations[(i-1)%len(locations)],
+			WorkMode:            workModes[(i-1)%len(workModes)],
+			InternshipType:      "paid",
+			Duration:            3 + i%3,
+			DurationUnit:        "months",
+			WorkingHours:        "10:00 AM - 5:00 PM",
+			RequiredSkills:      "Communication, Teamwork, Problem solving",
+			PreferredSkills:     "Git, Documentation",
+			RequiredEducation:   "Currently pursuing a relevant degree",
+			EligiblePrograms:    "BSc CSIT, BIT, BCA, BIM, Computer Engineering",
+			EligibleSemester:    "4th semester and above",
+			StipendAmount:       float64(12000 + i%11*1000),
+			StipendCurrency:     "NPR",
+			StipendPeriod:       "monthly",
+			VacancyCount:        1 + i%3,
+			StartDate:           future(30 + i%30),
+			ApplicationDeadline: future(14 + i%14),
+			ApplicationEmail:    "careers@techkarkhana.example",
+			Responsibilities:    "Support project delivery, collaborate with the team, and document completed work.",
+			Benefits:            "Mentorship, completion certificate, and flexible working arrangements",
+			Status:              enums.InternshipStatusPublished,
+			IsActive:            true,
+		}
+		if err := upsert(tx, &internship, "id"); err != nil {
+			return nil, fmt.Errorf("upsert internship %s: %w", key, err)
+		}
+		result[key] = internship
+	}
 	return result, nil
 }
 
@@ -386,7 +426,8 @@ func saveVerification(tx *gorm.DB, verification *models.OrganizationVerification
 func saveApplication(tx *gorm.DB, application *models.InternshipApplication) error {
 	var existing models.InternshipApplication
 	lookup := tx.Where(
-		"student_id = ? AND internship_id = ?",
+		"id = ? OR (student_id = ? AND internship_id = ?)",
+		application.ID,
 		application.StudentID,
 		application.InternshipID,
 	).Limit(1).Find(&existing)
