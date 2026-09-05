@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -16,6 +17,7 @@ import (
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 	"github.com/prasanna/student-job-portal/backend/internal/routes"
+	"github.com/prasanna/student-job-portal/backend/internal/seeder"
 	"github.com/prasanna/student-job-portal/backend/internal/services"
 	"github.com/prasanna/student-job-portal/backend/internal/storage"
 )
@@ -42,6 +44,12 @@ func main() {
 	}
 
 	// 3. Seed Initial Data
+	if !strings.EqualFold(cfg.App.Env, "production") {
+		if _, err := seeder.Run(db, os.Getenv("SEED_PASSWORD")); err != nil {
+			log.Fatal("Failed to seed development data: %v", err)
+		}
+		log.Info("Development database seed complete")
+	}
 	seedAdminUser(db, cfg, log)
 
 	// 4. Connect MinIO Storage
