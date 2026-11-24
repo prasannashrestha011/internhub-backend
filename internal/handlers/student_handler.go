@@ -3,223 +3,139 @@ package handlers
 import (
 	"errors"
 	"net/http"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
-
-	"github.com/prasanna/student-job-portal/backend/internal/config"
-	"github.com/prasanna/student-job-portal/backend/internal/logger"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
-	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 	"github.com/prasanna/student-job-portal/backend/internal/responses"
 	"github.com/prasanna/student-job-portal/backend/internal/services"
 )
 
-type StudentHandler struct {
-	Svc  *services.StudentService
-	Repo *repositories.StudentRepository
-	Cfg  *config.Config
-	Log  *logger.Logger
+type StudentHandler struct{ Svc *services.StudentService }
+
+func NewStudentHandler(svc *services.StudentService) *StudentHandler {
+	return &StudentHandler{Svc: svc}
 }
 
-func NewStudentHandler(svc *services.StudentService, repo *repositories.StudentRepository, cfg *config.Config, l *logger.Logger) *StudentHandler {
-	return &StudentHandler{Svc: svc, Repo: repo, Cfg: cfg, Log: l}
-}
-
-// GetProfile returns the current student's profile (or 404)
 func (h *StudentHandler) GetProfile(c *gin.Context) {
-	uid, ok := c.Get("user_id")
+	userID, ok := authenticatedUserID(c)
 	if !ok {
-		responses.Error(c, http.StatusUnauthorized, "missing user in context")
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
 		return
 	}
-	userIDStr, _ := uid.(string)
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		responses.Error(c, http.StatusUnauthorized, "invalid user id")
-		return
-	}
-	p, err := h.Svc.GetProfile(userID)
+	profile, err := h.Svc.GetProfile(userID)
 	if err != nil {
 		writeStudentError(c, err, "failed to fetch profile")
 		return
 	}
-	responses.Success(c, http.StatusOK, "profile fetched", p)
+	responses.Success(c, http.StatusOK, "profile fetched", profile)
 }
 
-// GetApplicationStats returns application metrics for the current student's dashboard.
+func (h *StudentHandler) UpsertProfile(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
+		return
+	}
+	var profile models.StudentProfile
+	if err := c.ShouldBindJSON(&profile); err != nil {
+		responses.Error(c, http.StatusBadRequest, "invalid profile")
+		return
+	}
+	profile.UserID = userID
+	if err := h.Svc.CreateOrUpdateProfile(c.Request.Context(), &profile); err != nil {
+		writeStudentError(c, err, "failed to save profile")
+		return
+	}
+	responses.Success(c, http.StatusOK, "profile saved", profile)
+}
+
 func (h *StudentHandler) GetApplicationStats(c *gin.Context) {
 	profileID, ok := getProfileID(c)
 	if !ok {
 		responses.Error(c, http.StatusUnauthorized, "invalid student profile context")
 		return
 	}
-
 	stats, err := h.Svc.GetApplicationStats(c.Request.Context(), profileID)
 	if err != nil {
 		writeStudentError(c, err, "failed to fetch application stats")
 		return
 	}
-
-	responses.Success(c, http.StatusOK, "student application stats fetched", stats)
+	responses.Success(c, http.StatusOK, "application stats", stats)
 }
 
-// UpsertProfile creates or updates the student's profile
-func (h *StudentHandler) UpsertProfile(c *gin.Context) {
-	uid, ok := c.Get("user_id")
+func (h *StudentHandler) UploadProfilePicture(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
 	if !ok {
-		responses.Error(c, http.StatusUnauthorized, "missing user in context")
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
 		return
 	}
-	userIDStr, _ := uid.(string)
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		responses.Error(c, http.StatusUnauthorized, "invalid user id")
-		return
-	}
-	var payload models.StudentProfile
-	if err := c.ShouldBindJSON(&payload); err != nil {
-		responses.Error(c, http.StatusBadRequest, "invalid payload")
-		return
-	}
-	payload.UserID = userID
-	payload.UpdatedAt = time.Now()
-	if err := h.Svc.CreateOrUpdateProfile(&payload); err != nil {
-		writeStudentError(c, err, "failed to save profile")
-		return
-	}
-	responses.Success(c, http.StatusOK, "profile saved", payload)
-}
-
-// UploadDocument handles multipart file upload for student documents
-func (h *StudentHandler) UploadDocument(c *gin.Context) {
-	uid, ok := c.Get("user_id")
-	if !ok {
-		responses.Error(c, http.StatusUnauthorized, "missing user in context")
-		return
-	}
-	userIDStr, _ := uid.(string)
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		responses.Error(c, http.StatusUnauthorized, "invalid user id")
-		return
-	}
-	// ensure profile exists
-	p, err := h.Svc.GetProfile(userID)
-	if err != nil {
-		writeStudentError(c, err, "failed to fetch profile")
-		return
-	}
-
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, (5<<20)+(1<<20))
 	file, err := c.FormFile("file")
 	if err != nil {
-		responses.Error(c, http.StatusBadRequest, "missing file")
+		responses.Error(c, http.StatusBadRequest, services.ErrInvalidProfilePicture.Error())
 		return
 	}
-	// Upload to minio via service then persist metadata
-	objectKey, size, mimeType, err := h.Svc.UploadDocument(userID, p.ID, file)
+	profile, err := h.Svc.UploadProfilePicture(c.Request.Context(), userID, file)
 	if err != nil {
-		writeStudentError(c, err, "failed to upload document")
+		writeStudentError(c, err, "failed to upload profile picture")
 		return
 	}
-	doc := &models.StudentDocument{
-		ProfileID: p.ID,
-		UserID:    userID,
-		ObjectKey: objectKey,
-		FileName:  file.Filename,
-		MimeType:  mimeType,
-		Size:      size,
-		IsDefault: false,
-	}
-	if err := h.Svc.AddDocument(doc); err != nil {
-		writeStudentError(c, err, "failed to save document metadata")
-		return
-	}
-	responses.Success(c, http.StatusCreated, "uploaded", doc)
+	responses.Success(c, http.StatusOK, "profile picture saved", profile)
 }
 
-// ListDocuments returns documents for the student's profile
-func (h *StudentHandler) ListDocuments(c *gin.Context) {
-	uid, ok := c.Get("user_id")
+func (h *StudentHandler) GetResume(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
 	if !ok {
-		responses.Error(c, http.StatusUnauthorized, "missing user in context")
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
 		return
 	}
-	userIDStr, _ := uid.(string)
-	userID, err := uuid.Parse(userIDStr)
+	resume, err := h.Svc.GetResume(c.Request.Context(), userID)
 	if err != nil {
-		responses.Error(c, http.StatusUnauthorized, "invalid user id")
+		writeStudentError(c, err, "failed to fetch CV")
 		return
 	}
-	docs, err := h.Svc.ListDocuments(userID)
-	if err != nil {
-		writeStudentError(c, err, "failed to list documents")
-		return
-	}
-	responses.Success(c, http.StatusOK, "documents", docs)
+	responses.Success(c, http.StatusOK, "CV", resume)
 }
 
-// SetDefaultDocument sets a document as default
-func (h *StudentHandler) SetDefaultDocument(c *gin.Context) {
-	docIDStr := c.Param("id")
-	docID, err := uuid.Parse(docIDStr)
-	if err != nil {
-		responses.Error(c, http.StatusBadRequest, "invalid document id")
-		return
-	}
-	uid, ok := c.Get("user_id")
+func (h *StudentHandler) UploadResume(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
 	if !ok {
-		responses.Error(c, http.StatusUnauthorized, "missing user in context")
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
 		return
 	}
-	userIDStr, _ := uid.(string)
-	userID, err := uuid.Parse(userIDStr)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, (10<<20)+(1<<20))
+	file, err := c.FormFile("file")
 	if err != nil {
-		responses.Error(c, http.StatusUnauthorized, "invalid user id")
+		responses.Error(c, http.StatusBadRequest, "upload a PDF CV of at most 10 MiB")
 		return
 	}
-	if err := h.Svc.SetDefaultDocument(userID, docID); err != nil {
-		writeStudentError(c, err, "failed to set default document")
+	resume, err := h.Svc.UploadResume(c.Request.Context(), userID, file)
+	if err != nil {
+		writeStudentError(c, err, "failed to save CV")
 		return
 	}
-	responses.Success(c, http.StatusOK, "default set", nil)
+	responses.Success(c, http.StatusOK, "CV saved", resume)
 }
 
-// DeleteDocument deletes a student's document
-func (h *StudentHandler) DeleteDocument(c *gin.Context) {
-	docIDStr := c.Param("id")
-	docID, err := uuid.Parse(docIDStr)
-	if err != nil {
-		responses.Error(c, http.StatusBadRequest, "invalid document id")
-		return
-	}
-	uid, ok := c.Get("user_id")
+func (h *StudentHandler) DeleteResume(c *gin.Context) {
+	userID, ok := authenticatedUserID(c)
 	if !ok {
-		responses.Error(c, http.StatusUnauthorized, "missing user in context")
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
 		return
 	}
-	userIDStr, _ := uid.(string)
-	userID, err := uuid.Parse(userIDStr)
-	if err != nil {
-		responses.Error(c, http.StatusUnauthorized, "invalid user id")
+	if err := h.Svc.DeleteResume(c.Request.Context(), userID); err != nil {
+		writeStudentError(c, err, "failed to delete CV")
 		return
 	}
-	if err := h.Svc.DeleteDocumentByUserID(userID, docID); err != nil {
-		writeStudentError(c, err, "failed to delete document")
-		return
-	}
-	responses.Success(c, http.StatusOK, "deleted", nil)
+	responses.Success(c, http.StatusOK, "CV deleted", nil)
 }
 
 func writeStudentError(c *gin.Context, err error, fallback string) {
 	switch {
-	case errors.Is(err, services.ErrInvalidStudentData):
+	case errors.Is(err, services.ErrInvalidStudentData), errors.Is(err, services.ErrInvalidProfilePicture):
 		responses.Error(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrStudentProfileNotFound):
 		responses.Error(c, http.StatusNotFound, "profile not found")
-	case errors.Is(err, services.ErrStudentDocumentNotFound):
-		responses.Error(c, http.StatusNotFound, "document not found")
 	default:
 		responses.Error(c, http.StatusInternalServerError, fallback)
 	}

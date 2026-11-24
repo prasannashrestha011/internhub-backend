@@ -3,22 +3,15 @@ package main
 import (
 	"fmt"
 	"net/http"
-	"os"
-	"strings"
 	"time"
 
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 
 	"github.com/prasanna/student-job-portal/backend/internal/config"
 	"github.com/prasanna/student-job-portal/backend/internal/database"
 	"github.com/prasanna/student-job-portal/backend/internal/logger"
-	"github.com/prasanna/student-job-portal/backend/internal/models"
-	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 	"github.com/prasanna/student-job-portal/backend/internal/routes"
-	"github.com/prasanna/student-job-portal/backend/internal/seeder"
-	"github.com/prasanna/student-job-portal/backend/internal/services"
 	"github.com/prasanna/student-job-portal/backend/internal/storage"
 )
 
@@ -43,66 +36,23 @@ func main() {
 		log.Fatal("AutoMigrate failed: %v", err)
 	}
 
-	// 3. Seed Initial Data
-	if !strings.EqualFold(cfg.App.Env, "production") {
-		if _, err := seeder.Run(db, os.Getenv("SEED_PASSWORD")); err != nil {
-			log.Fatal("Failed to seed development data: %v", err)
-		}
-		log.Info("Development database seed complete")
-	}
-	seedAdminUser(db, cfg, log)
-
-	// 4. Connect MinIO Storage
+	// 3. Connect MinIO Storage
 	minioClient, err := storage.ConnectMinIO(&cfg.MinIO, log)
 	if err != nil {
 		log.Fatal("Failed to connect to MinIO: %v", err)
 	}
 
-	// 5. Initialize Engine & Register Routes
+	// 4. Initialize Engine & Register Routes
 	router := initRouter(cfg)
 	routes.Register(router, db, cfg, log, minioClient)
 
-	// 6. Start Server
+	// 5. Start Server
 	startServer(router, cfg, log)
 }
 
 // ============================================================================
 // INITIALIZATION HELPERS
 // ============================================================================
-
-func seedAdminUser(db *gorm.DB, cfg *config.Config, log *logger.Logger) {
-	adminEmail := getenv("ADMIN_EMAIL", "")
-	adminPassword := getenv("ADMIN_PASSWORD", "")
-
-	if adminEmail == "" || adminPassword == "" {
-		return
-	}
-
-	userRepo := repositories.NewUserRepository(db)
-	if _, err := userRepo.GetByEmail(adminEmail); err == nil {
-		return // Admin user already exists
-	}
-
-	hash, err := services.NewAuthService(userRepo, cfg, log).HashPassword(adminPassword)
-	if err != nil {
-		log.Error("Failed to hash admin password: %v", err)
-		return
-	}
-
-	admin := &models.User{
-		Email:        adminEmail,
-		PasswordHash: hash,
-		FullName:     "Admin",
-		Role:         models.RoleAdmin,
-	}
-
-	if err := userRepo.Create(admin); err != nil {
-		log.Error("Failed to create admin user: %v", err)
-		return
-	}
-
-	log.Info("Seeded admin user: %s", adminEmail)
-}
 
 func initRouter(cfg *config.Config) *gin.Engine {
 	if cfg.App.Env == "production" {
@@ -136,15 +86,8 @@ func CORSMiddleware() gin.HandlerFunc {
 		AllowOrigins:     []string{"http://localhost:3000"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization", "X-Requested-With"},
-		ExposeHeaders:    []string{"Content-Length"},
+		ExposeHeaders:    []string{"Content-Length", "Retry-After"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
 	})
-}
-
-func getenv(key, def string) string {
-	if v, ok := os.LookupEnv(key); ok {
-		return v
-	}
-	return def
 }

@@ -38,15 +38,7 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Printf(
-		"Seed complete: %d users, %d student profiles, %d employer profiles, %d verifications, %d internships, %d applications.\n",
-		summary.Users,
-		summary.StudentProfiles,
-		summary.RecruiterProfiles,
-		summary.OrganizationVerifications,
-		summary.Internships,
-		summary.Applications,
-	)
+	fmt.Printf("Seed complete: %d users, %d student profiles, %d employer profiles, %d internships, %d applications.\n", summary.Users, summary.StudentProfiles, summary.RecruiterProfiles, summary.Internships, summary.Applications)
 	if usingDefaultPassword {
 		fmt.Printf("Development login password: %s (override with SEED_PASSWORD).\n", seeder.DefaultPassword)
 	} else {

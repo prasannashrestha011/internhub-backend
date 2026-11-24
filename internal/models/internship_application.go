@@ -10,12 +10,10 @@ import (
 type InternshipApplicationStatus string
 
 const (
-	ApplicationStatusSubmitted   InternshipApplicationStatus = "submitted"
-	ApplicationStatusReviewing   InternshipApplicationStatus = "reviewing"
-	ApplicationStatusShortlisted InternshipApplicationStatus = "shortlisted"
-	ApplicationStatusRejected    InternshipApplicationStatus = "rejected"
-	ApplicationStatusAccepted    InternshipApplicationStatus = "accepted"
-	ApplicationStatusWithdrawn   InternshipApplicationStatus = "withdrawn"
+	ApplicationStatusSubmitted InternshipApplicationStatus = "submitted"
+	ApplicationStatusRejected  InternshipApplicationStatus = "rejected"
+	ApplicationStatusAccepted  InternshipApplicationStatus = "accepted"
+	ApplicationStatusWithdrawn InternshipApplicationStatus = "withdrawn"
 )
 
 type InternshipApplication struct {
@@ -28,12 +26,7 @@ type InternshipApplication struct {
 
 	EmployerNote string `gorm:"type:text" json:"employer_note,omitempty"`
 
-	AppliedAt     time.Time  `gorm:"not null" json:"applied_at"`
-	ReviewedAt    *time.Time `json:"reviewed_at,omitempty"`
-	ShortlistedAt *time.Time `json:"shortlisted_at,omitempty"`
-	AcceptedAt    *time.Time `json:"accepted_at,omitempty"`
-	RejectedAt    *time.Time `json:"rejected_at,omitempty"`
-	WithdrawnAt   *time.Time `json:"withdrawn_at,omitempty"`
+	AppliedAt time.Time `gorm:"not null" json:"applied_at"`
 
 	Internship *Internship     `gorm:"foreignKey:InternshipID;references:ID" json:"internship,omitempty"`
 	Student    *StudentProfile `gorm:"foreignKey:StudentID;references:ID" json:"student,omitempty"`

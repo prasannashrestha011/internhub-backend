@@ -1,11 +1,12 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"mime/multipart"
-	"net/http"
 	"strings"
 	"time"
 
@@ -27,10 +28,6 @@ type RecruiterProfileService struct {
 	minioClient *minio.Client
 	bucketName  string
 }
-
-const (
-	maxOrganizationLogoSize = 5 * 1024 * 1024 // 5 MB
-)
 
 func NewRecruiterProfileService(
 	repo *repositories.RecruiterProfileRepository,
@@ -74,16 +71,16 @@ func (s *RecruiterProfileService) CreateOrUpdateProfile(
 	// Do not trust user_id coming from request body.
 	// Always use authenticated user's ID.
 	profile.UserID = userID
+	profile.User = nil
+	profile.OrganizationLogo = ""
 
-	if profile.ID == uuid.Nil {
-		profile.ID = uuid.New()
-	}
+	profile.ID = uuid.New()
 
 	if err := s.repo.Upsert(ctx, profile); err != nil {
 		return nil, err
 	}
 
-	return s.repo.GetByUserID(ctx, userID)
+	return s.GetByUserID(ctx, userID)
 }
 
 // GetByUserID returns an recruiter profile by user ID.
@@ -150,16 +147,12 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 		return "", fmt.Errorf("%w: invalid user id", ErrInvalidRecruiterProfileData)
 	}
 
-	if fileHeader == nil {
-		return "", fmt.Errorf("%w: organization logo is required", ErrInvalidRecruiterProfileData)
+	data, contentType, extension, err := readProfilePicture(fileHeader)
+	if err != nil {
+		return "", err
 	}
-
-	if fileHeader.Size <= 0 {
-		return "", fmt.Errorf("%w: uploaded file is empty", ErrInvalidRecruiterProfileData)
-	}
-
-	if fileHeader.Size > maxOrganizationLogoSize {
-		return "", fmt.Errorf("%w: organization logo must be smaller than 5MB", ErrInvalidRecruiterProfileData)
+	if s.minioClient == nil {
+		return "", errors.New("profile picture storage unavailable")
 	}
 
 	// Make sure recruiter profile exists.
@@ -169,33 +162,6 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 	}
 	if err != nil {
 		return "", fmt.Errorf("failed to get recruiter profile: %w", err)
-	}
-
-	file, err := fileHeader.Open()
-	if err != nil {
-		return "", fmt.Errorf("failed to open uploaded file: %w", err)
-	}
-	defer file.Close()
-
-	// Read first 512 bytes for MIME detection.
-	buffer := make([]byte, 512)
-
-	n, err := file.Read(buffer)
-	if err != nil && n == 0 {
-		return "", fmt.Errorf("failed to read uploaded file: %w", err)
-	}
-
-	contentType := http.DetectContentType(buffer[:n])
-
-	// Only allow actual image formats that we support.
-	extension, err := getImageExtension(contentType)
-	if err != nil {
-		return "", err
-	}
-
-	// Reset file pointer after MIME detection.
-	if _, err := file.Seek(0, 0); err != nil {
-		return "", fmt.Errorf("failed to reset uploaded file: %w", err)
 	}
 
 	objectName := fmt.Sprintf(
@@ -209,8 +175,8 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 		ctx,
 		s.bucketName,
 		objectName,
-		file,
-		fileHeader.Size,
+		bytes.NewReader(data),
+		int64(len(data)),
 		minio.PutObjectOptions{
 			ContentType: contentType,
 		},
@@ -220,6 +186,8 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 		return "", fmt.Errorf("failed to upload organization logo: %w", err)
 	}
 
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	oldLogo := profile.OrganizationLogo
 
 	// Store only MinIO object key in DB.
@@ -231,7 +199,7 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 	if err != nil {
 		// DB update failed, so remove newly uploaded object.
 		_ = s.minioClient.RemoveObject(
-			ctx,
+			cleanupCtx,
 			s.bucketName,
 			objectName,
 			minio.RemoveObjectOptions{},
@@ -243,7 +211,7 @@ func (s *RecruiterProfileService) UploadOrganizationLogo(
 	// to the new object.
 	if oldLogo != "" && oldLogo != objectName {
 		_ = s.minioClient.RemoveObject(
-			ctx,
+			cleanupCtx,
 			s.bucketName,
 			oldLogo,
 			minio.RemoveObjectOptions{},
@@ -266,6 +234,9 @@ func (s *RecruiterProfileService) GetLogoURL(
 		return "", nil
 	}
 
+	if s.minioClient == nil {
+		return "", errors.New("profile picture storage unavailable")
+	}
 	url, err := s.minioClient.PresignedGetObject(
 		ctx,
 		s.bucketName,
@@ -281,19 +252,11 @@ func (s *RecruiterProfileService) GetLogoURL(
 	return url.String(), nil
 }
 
-func getImageExtension(contentType string) (string, error) {
-	switch strings.ToLower(contentType) {
-
-	case "image/jpeg":
-		return ".jpg", nil
-
-	case "image/png":
-		return ".png", nil
-
-	case "image/webp":
-		return ".webp", nil
-
-	default:
-		return "", fmt.Errorf("%w: unsupported image type; only JPEG, PNG and WEBP are allowed", ErrInvalidRecruiterProfileData)
+// listingLogoURL keeps listings available if the optional logo cannot be signed.
+func (s *RecruiterProfileService) listingLogoURL(ctx context.Context, objectKey string) string {
+	url, err := s.GetLogoURL(ctx, objectKey)
+	if err != nil {
+		slog.WarnContext(ctx, "Could not sign company logo", "error", err)
 	}
+	return url
 }

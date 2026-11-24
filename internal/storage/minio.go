@@ -34,8 +34,6 @@ func ensureBucketsExist(ctx context.Context, client *minio.Client, cfg *config.M
 	buckets := []string{
 		cfg.ProfileBucket,
 		cfg.StudentDocBucket,
-		cfg.CompanyLogoBucket,
-		cfg.CompanyDocBucket,
 	}
 
 	for _, bucket := range buckets {

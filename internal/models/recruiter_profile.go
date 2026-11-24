@@ -20,10 +20,8 @@ type RecruiterProfile struct {
 	Industry            string `gorm:"size:150" json:"industry,omitempty"`
 	OrganizationSize    string `gorm:"size:50" json:"organization_size,omitempty"`
 	OrganizationAbout   string `gorm:"type:text" json:"organization_about,omitempty"`
-	VerificationStatus  string `gorm:"default:draft" json:"verification_status"`
 
-	User         *User                     `gorm:"foreignKey:UserID" json:"user,omitempty"`
-	Verification *OrganizationVerification `gorm:"foreignKey:RecruiterProfileID" json:"verification,omitempty"`
+	User *User `gorm:"foreignKey:UserID" json:"user,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

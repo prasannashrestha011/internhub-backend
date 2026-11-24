@@ -1,14 +1,18 @@
 package handlers
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/prasanna/student-job-portal/backend/internal/logger"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
+	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 	"github.com/prasanna/student-job-portal/backend/internal/responses"
 	"github.com/prasanna/student-job-portal/backend/internal/services"
 )
@@ -24,9 +28,9 @@ func NewAuthHandler(svc *services.AuthService, l *logger.Logger) *AuthHandler {
 
 // DTOs
 type registerRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=8"`
-	FullName string `json:"full_name" binding:"required"`
+	Email    string `json:"email" binding:"required,email,max=254"`
+	Password string `json:"password" binding:"required,min=8,max=72"`
+	FullName string `json:"full_name" binding:"required,max=255"`
 }
 
 type loginRequest struct {
@@ -42,61 +46,100 @@ type tokenResponse struct {
 
 // RegisterStudent handles student registration
 func (h *AuthHandler) RegisterStudent(c *gin.Context) {
-	var req registerRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		responses.ErrorWithDetails(c, http.StatusBadRequest, "Invalid input", gin.H{"error": err.Error()})
-		return
-	}
-
-	// Hash password
-	hash, err := h.AuthSvc.HashPassword(req.Password)
-	if err != nil {
-		responses.Error(c, http.StatusInternalServerError, "Failed to process password")
-		return
-	}
-
-	user := &models.User{
-		Email:        req.Email,
-		PasswordHash: hash,
-		FullName:     req.FullName,
-		Role:         models.RoleStudent,
-	}
-
-	if err := h.AuthSvc.Repo.Create(user); err != nil {
-		responses.Error(c, http.StatusInternalServerError, "Failed to create user")
-		return
-	}
-
-	responses.Success(c, http.StatusCreated, "Student registered successfully", gin.H{"user_id": user.ID})
+	h.register(c, models.RoleStudent)
 }
 
 // RegisterEmployer handles employer registration
 func (h *AuthHandler) RegisterEmployer(c *gin.Context) {
+	h.register(c, models.RoleEmployer)
+}
+
+func (h *AuthHandler) register(c *gin.Context, role models.Role) {
 	var req registerRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		responses.ErrorWithDetails(c, http.StatusBadRequest, "Invalid input", gin.H{"error": err.Error()})
+		responses.Error(c, http.StatusBadRequest, "Enter a valid email, full name and password of 8 to 72 characters")
 		return
 	}
-
-	hash, err := h.AuthSvc.HashPassword(req.Password)
+	if strings.TrimSpace(req.FullName) == "" || len(req.Password) > 72 {
+		responses.Error(c, http.StatusBadRequest, "Full name is required and password must not exceed 72 bytes")
+		return
+	}
+	user, sent, err := h.AuthSvc.Register(c.Request.Context(), req.Email, req.Password, req.FullName, role)
 	if err != nil {
-		responses.Error(c, http.StatusInternalServerError, "Failed to process password")
+		h.verificationError(c, err)
 		return
 	}
-
-	user := &models.User{
-		Email:        req.Email,
-		PasswordHash: hash,
-		FullName:     req.FullName,
-		Role:         models.RoleEmployer,
+	message := "Account created. Check your email for a confirmation code."
+	if !sent {
+		message = "Account created, but we could not send your code. Try resending in 60 seconds."
 	}
+	responses.Success(c, http.StatusCreated, message, gin.H{
+		"user_id": user.ID, "email": user.Email, "verification_required": true,
+		"email_sent": sent, "resend_after_seconds": 60,
+	})
+}
 
-	if err := h.AuthSvc.Repo.Create(user); err != nil {
-		responses.Error(c, http.StatusInternalServerError, "Failed to create user")
+func (h *AuthHandler) VerifyEmail(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email,max=254"`
+		Code  string `json:"code" binding:"required,len=6"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		responses.Error(c, http.StatusBadRequest, "Enter your email and six-digit confirmation code")
 		return
 	}
+	if err := h.AuthSvc.VerifyEmail(req.Email, req.Code); err != nil {
+		h.verificationError(c, err)
+		return
+	}
+	responses.Success(c, http.StatusOK, "Email confirmed. You can now sign in.", nil)
+}
 
-	responses.Success(c, http.StatusCreated, "Employer registered successfully", gin.H{"user_id": user.ID})
+func (h *AuthHandler) ResendVerification(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email,max=254"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		responses.Error(c, http.StatusBadRequest, "Enter a valid email address")
+		return
+	}
+	user, err := h.AuthSvc.Repo.GetByEmail(req.Email)
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		h.verificationError(c, err)
+		return
+	}
+	if err == nil && !user.CanSignIn() {
+		if err := h.AuthSvc.SendVerification(c.Request.Context(), user); err != nil {
+			// Keep account existence and delivery/limit state private on this public endpoint.
+			if !errors.Is(err, repositories.ErrVerificationCooldown) && !errors.Is(err, repositories.ErrVerificationSendLimit) && !errors.Is(err, repositories.ErrVerificationAttemptLimit) && !errors.Is(err, repositories.ErrAlreadyVerified) && !errors.Is(err, services.ErrEmailUnavailable) {
+				h.verificationError(c, err)
+				return
+			}
+		}
+	}
+	responses.Success(c, http.StatusAccepted, "If this account needs confirmation and its sending limits allow it, we will send a new code. Check your inbox and spam folder. If you have requested five codes, wait an hour before trying again.", gin.H{"resend_after_seconds": 60})
+}
+
+func (h *AuthHandler) verificationError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, services.ErrEmailNotVerified):
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "code": "EMAIL_NOT_VERIFIED", "message": err.Error()})
+	case errors.Is(err, services.ErrEmailExists):
+		responses.Error(c, http.StatusConflict, err.Error())
+	case errors.Is(err, repositories.ErrInvalidVerificationCode):
+		responses.Error(c, http.StatusBadRequest, err.Error())
+	case errors.Is(err, repositories.ErrVerificationCooldown):
+		c.Header("Retry-After", "60")
+		responses.Error(c, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, repositories.ErrVerificationSendLimit), errors.Is(err, repositories.ErrVerificationAttemptLimit):
+		c.Header("Retry-After", "3600")
+		responses.Error(c, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, services.ErrEmailUnavailable):
+		responses.Error(c, http.StatusServiceUnavailable, "We could not send a confirmation code. Please try again later.")
+	default:
+		h.Logger.Error("email verification operation failed")
+		responses.Error(c, http.StatusInternalServerError, "Unable to process email confirmation. Please try again.")
+	}
 }
 
 // Login authenticates user and returns tokens
@@ -114,8 +157,17 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	if user.Role != models.RoleStudent && user.Role != models.RoleEmployer {
+		responses.Error(c, http.StatusForbidden, "account role is no longer supported")
+		return
+	}
+
 	if err := h.AuthSvc.ComparePassword(user.PasswordHash, req.Password); err != nil {
 		responses.Error(c, http.StatusUnauthorized, "Invalid credentials")
+		return
+	}
+	if !user.CanSignIn() {
+		h.verificationError(c, services.ErrEmailNotVerified)
 		return
 	}
 
@@ -186,6 +238,14 @@ func (h *AuthHandler) Refresh(c *gin.Context) {
 	user, err := h.AuthSvc.Repo.GetByID(rt.UserID)
 	if err != nil {
 		responses.Error(c, http.StatusInternalServerError, "User not found")
+		return
+	}
+	if user.Role != models.RoleStudent && user.Role != models.RoleEmployer {
+		responses.Error(c, http.StatusForbidden, "account role is no longer supported")
+		return
+	}
+	if !user.CanSignIn() {
+		h.verificationError(c, services.ErrEmailNotVerified)
 		return
 	}
 
@@ -274,6 +334,10 @@ func (h *AuthHandler) Me(c *gin.Context) {
 	}
 
 	// Hide sensitive fields
+	if !user.CanSignIn() {
+		h.verificationError(c, services.ErrEmailNotVerified)
+		return
+	}
 	user.PasswordHash = ""
 	responses.Success(c, http.StatusOK, "Current user fetched", user)
 }

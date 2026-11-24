@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/prasanna/student-job-portal/backend/internal/enums"
+	"github.com/prasanna/student-job-portal/backend/internal/logger"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
 )
@@ -27,6 +28,10 @@ var (
 )
 
 type InternshipApplicationService struct {
+	users          *repositories.UserRepository
+	sender         ApplicationStatusSender
+	log            *logger.Logger
+	profiles       *RecruiterProfileService
 	repo           *repositories.InternshipApplicationRepository
 	internshipRepo *repositories.InternshipRepository
 	studentRepo    *repositories.StudentRepository
@@ -52,16 +57,8 @@ type RecruiterApplicationFilter struct {
 	PageSize     int
 }
 
-type StudentApplicationStatusFilter string
-
-const (
-	StudentApplicationFilterPending  StudentApplicationStatusFilter = "pending"
-	StudentApplicationFilterAccepted StudentApplicationStatusFilter = "accepted"
-	StudentApplicationFilterRejected StudentApplicationStatusFilter = "rejected"
-)
-
 type StudentApplicationFilter struct {
-	Status   StudentApplicationStatusFilter
+	Status   models.InternshipApplicationStatus
 	Page     int
 	PageSize int
 }
@@ -77,7 +74,6 @@ type RecruiterCandidate struct {
 	FacultyOrMajor  string    `json:"faculty_or_major"`
 	CurrentSemester string    `json:"current_semester"`
 	GraduationYear  int       `json:"graduation_year"`
-	Availability    string    `json:"availability"`
 	LinkedinURL     string    `json:"linkedin_url"`
 	GithubURL       string    `json:"github_url"`
 	PortfolioURL    string    `json:"portfolio_url"`
@@ -103,21 +99,16 @@ type RecruiterInternshipSummary struct {
 }
 
 type RecruiterApplication struct {
-	ID            uuid.UUID                          `json:"id"`
-	InternshipID  uuid.UUID                          `json:"internship_id"`
-	StudentID     uuid.UUID                          `json:"student_id"`
-	Status        models.InternshipApplicationStatus `json:"status"`
-	EmployerNote  string                             `json:"employer_note"`
-	AppliedAt     time.Time                          `json:"applied_at"`
-	ReviewedAt    *time.Time                         `json:"reviewed_at"`
-	ShortlistedAt *time.Time                         `json:"shortlisted_at"`
-	AcceptedAt    *time.Time                         `json:"accepted_at"`
-	RejectedAt    *time.Time                         `json:"rejected_at"`
-	WithdrawnAt   *time.Time                         `json:"withdrawn_at"`
-	CreatedAt     time.Time                          `json:"created_at"`
-	UpdatedAt     time.Time                          `json:"updated_at"`
-	Student       *RecruiterCandidate                `json:"student"`
-	Internship    *RecruiterInternshipSummary        `json:"internship"`
+	ID           uuid.UUID                          `json:"id"`
+	InternshipID uuid.UUID                          `json:"internship_id"`
+	StudentID    uuid.UUID                          `json:"student_id"`
+	Status       models.InternshipApplicationStatus `json:"status"`
+	EmployerNote string                             `json:"employer_note"`
+	AppliedAt    time.Time                          `json:"applied_at"`
+	CreatedAt    time.Time                          `json:"created_at"`
+	UpdatedAt    time.Time                          `json:"updated_at"`
+	Student      *RecruiterCandidate                `json:"student"`
+	Internship   *RecruiterInternshipSummary        `json:"internship"`
 }
 
 type RecruiterApplicationSummary struct {
@@ -149,6 +140,7 @@ type StudentApplicationInternship struct {
 	ID               uuid.UUID `json:"id"`
 	Title            string    `json:"title"`
 	OrganizationName string    `json:"organization_name"`
+	OrganizationLogo string    `json:"organization_logo,omitempty"`
 	Location         string    `json:"location"`
 	WorkMode         string    `json:"work_mode"`
 	InternshipType   string    `json:"internship_type"`
@@ -157,18 +149,13 @@ type StudentApplicationInternship struct {
 }
 
 type StudentApplicationSummary struct {
-	ID            uuid.UUID                          `json:"id"`
-	InternshipID  uuid.UUID                          `json:"internship_id"`
-	Status        models.InternshipApplicationStatus `json:"status"`
-	EmployerNote  string                             `json:"employer_note"`
-	AppliedAt     time.Time                          `json:"applied_at"`
-	ReviewedAt    *time.Time                         `json:"reviewed_at"`
-	ShortlistedAt *time.Time                         `json:"shortlisted_at"`
-	AcceptedAt    *time.Time                         `json:"accepted_at"`
-	RejectedAt    *time.Time                         `json:"rejected_at"`
-	WithdrawnAt   *time.Time                         `json:"withdrawn_at"`
-	UpdatedAt     time.Time                          `json:"updated_at"`
-	Internship    *StudentApplicationInternship      `json:"internship"`
+	ID           uuid.UUID                          `json:"id"`
+	InternshipID uuid.UUID                          `json:"internship_id"`
+	Status       models.InternshipApplicationStatus `json:"status"`
+	EmployerNote string                             `json:"employer_note"`
+	AppliedAt    time.Time                          `json:"applied_at"`
+	UpdatedAt    time.Time                          `json:"updated_at"`
+	Internship   *StudentApplicationInternship      `json:"internship"`
 }
 
 func NewInternshipApplicationService(
@@ -177,8 +164,16 @@ func NewInternshipApplicationService(
 	studentRepo *repositories.StudentRepository,
 	minio documentURLSigner,
 	bucketName string,
+	profiles *RecruiterProfileService,
+	users *repositories.UserRepository,
+	sender ApplicationStatusSender,
+	log *logger.Logger,
 ) *InternshipApplicationService {
 	return &InternshipApplicationService{
+		users:          users,
+		sender:         sender,
+		log:            log,
+		profiles:       profiles,
 		repo:           repo,
 		internshipRepo: internshipRepo,
 		studentRepo:    studentRepo,
@@ -187,11 +182,11 @@ func NewInternshipApplicationService(
 	}
 }
 
-func (s *InternshipApplicationService) CreateApplication(ctx context.Context, application *models.InternshipApplication) error {
+func (s *InternshipApplicationService) CreateApplication(ctx context.Context, userID uuid.UUID, application *models.InternshipApplication) error {
 	if application == nil {
 		return fmt.Errorf("%w: application cannot be nil", ErrInvalidApplicationData)
 	}
-	if application.StudentID == uuid.Nil {
+	if userID == uuid.Nil {
 		return fmt.Errorf("%w: student ID is required", ErrInvalidApplicationData)
 	}
 	if application.InternshipID == uuid.Nil {
@@ -199,14 +194,15 @@ func (s *InternshipApplicationService) CreateApplication(ctx context.Context, ap
 	}
 
 	// Verify student profile exists
-	studentID, err := s.studentRepo.ResolveProfileID(application.StudentID)
+	student, err := s.studentRepo.GetByUserIDContext(ctx, userID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return fmt.Errorf("%w: student profile not found", ErrInvalidApplicationData)
 		}
 		return fmt.Errorf("check student profile: %w", err)
 	}
-	application.StudentID = studentID
+
+	application.StudentID = student.ID
 
 	// Check internship existence and eligibility
 	internship, err := s.internshipRepo.GetByID(ctx, application.InternshipID)
@@ -217,12 +213,19 @@ func (s *InternshipApplicationService) CreateApplication(ctx context.Context, ap
 		return fmt.Errorf("check internship: %w", err)
 	}
 
-	if !internship.IsActive || internship.Status != enums.InternshipStatusPublished {
+	if internship.Status != enums.InternshipStatusPublished {
 		return ErrInternshipNotActive
 	}
 
 	if internship.ApplicationDeadline != nil && time.Now().After(*internship.ApplicationDeadline) {
 		return ErrApplicationClosed
+	}
+
+	if err := s.internshipRepo.LoadPublicIssuer(ctx, internship); err != nil {
+		return err
+	}
+	if internship.Issuer.UserID == uuid.Nil {
+		return ErrInternshipNotActive
 	}
 
 	// Check if student already applied
@@ -233,8 +236,14 @@ func (s *InternshipApplicationService) CreateApplication(ctx context.Context, ap
 		return fmt.Errorf("check existing application: %w", err)
 	}
 
-	application.Status = models.ApplicationStatusSubmitted
-	application.AppliedAt = time.Now()
+	if _, err := s.studentRepo.GetResume(ctx, student.ID); errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("%w: upload your PDF CV before applying", ErrInvalidApplicationData)
+	} else if err != nil {
+		return err
+	}
+
+	*application = models.InternshipApplication{InternshipID: application.InternshipID, StudentID: student.ID,
+		Status: models.ApplicationStatusSubmitted, AppliedAt: time.Now()}
 
 	return s.repo.Create(ctx, application)
 }
@@ -301,7 +310,7 @@ func (s *InternshipApplicationService) ListByStudent(
 		return nil, 0, err
 	}
 
-	return mapStudentApplications(apps), total, nil
+	return s.mapStudentApplications(ctx, apps), total, nil
 }
 
 // FindByStudentAndInternship returns the authenticated student's application
@@ -330,7 +339,7 @@ func (s *InternshipApplicationService) FindByStudentAndInternship(
 		return nil, fmt.Errorf("find student application: %w", err)
 	}
 
-	mapped := mapStudentApplications([]models.InternshipApplication{*application})
+	mapped := s.mapStudentApplications(ctx, []models.InternshipApplication{*application})
 	return &mapped[0], nil
 }
 
@@ -403,11 +412,13 @@ func (s *InternshipApplicationService) GetForRecruiter(
 	detail := &RecruiterApplicationDetail{
 		Application: mapRecruiterApplication(application),
 	}
-	if application.Student == nil || len(application.Student.Documents) == 0 {
+	document, err := s.studentRepo.GetResume(ctx, application.StudentID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return detail, nil
 	}
-
-	document := application.Student.Documents[0]
+	if err != nil {
+		return nil, err
+	}
 	detail.Document = &RecruiterApplicationDocument{
 		ID:       document.ID,
 		FileName: document.FileName,
@@ -470,61 +481,38 @@ func (s *InternshipApplicationService) UpdateStatus(
 		)
 	}
 
-	now := time.Now()
-	statusChanged := application.Status != newStatus
+	previousStatus := application.Status
 	application.Status = newStatus
 	if employerNote != nil {
 		application.EmployerNote = strings.TrimSpace(*employerNote)
 	}
 
-	switch {
-	case statusChanged && newStatus == models.ApplicationStatusReviewing:
-		application.ReviewedAt = &now
-	case statusChanged && newStatus == models.ApplicationStatusShortlisted:
-		application.ShortlistedAt = &now
-	case statusChanged && newStatus == models.ApplicationStatusAccepted:
-		application.AcceptedAt = &now
-	case statusChanged && newStatus == models.ApplicationStatusRejected:
-		application.RejectedAt = &now
+	updatedStatus, err := s.repo.UpdateApplicationStatus(ctx, application, previousStatus)
+	if err != nil {
+		return nil, err
+	}
+	if !updatedStatus {
+		return nil, ErrInvalidStatusTransition
 	}
 
-	if err := s.repo.Update(ctx, application); err != nil {
-		return nil, err
+	// shortcut: delivery is attempted once after saving; use a durable outbox if retries are required.
+	if s.sender != nil && application.Student != nil {
+		user, err := s.users.GetByIDContext(ctx, application.Student.UserID)
+		if err == nil {
+			err = s.sender.SendApplicationStatus(ctx, user.Email, internship.Title, application.Status, application.EmployerNote)
+		}
+		if err != nil && s.log != nil {
+			// SMTP errors can contain addresses or message content.
+			s.log.Error("application status email failed", "application_id", application.ID)
+		}
 	}
 
 	updated := mapRecruiterApplication(application)
 	return &updated, nil
 }
 
-// isValidEmployerStatusTransition keeps the application workflow small and
-// prevents employers from setting student-only or unknown statuses.
 func isValidEmployerStatusTransition(current, next models.InternshipApplicationStatus) bool {
-	if current == next {
-		switch next {
-		case models.ApplicationStatusReviewing,
-			models.ApplicationStatusShortlisted:
-			return true
-		default:
-			return false
-		}
-	}
-
-	switch current {
-	case models.ApplicationStatusSubmitted:
-		return next == models.ApplicationStatusReviewing ||
-			next == models.ApplicationStatusShortlisted ||
-			next == models.ApplicationStatusAccepted ||
-			next == models.ApplicationStatusRejected
-	case models.ApplicationStatusReviewing:
-		return next == models.ApplicationStatusShortlisted ||
-			next == models.ApplicationStatusAccepted ||
-			next == models.ApplicationStatusRejected
-	case models.ApplicationStatusShortlisted:
-		return next == models.ApplicationStatusAccepted ||
-			next == models.ApplicationStatusRejected
-	default:
-		return false
-	}
+	return current == models.ApplicationStatusSubmitted && (next == models.ApplicationStatusAccepted || next == models.ApplicationStatusRejected)
 }
 
 func (s *InternshipApplicationService) WithdrawApplication(ctx context.Context, applicationID, studentProfileID uuid.UUID) error {
@@ -552,29 +540,26 @@ func (s *InternshipApplicationService) WithdrawApplication(ctx context.Context, 
 		)
 	}
 
-	now := time.Now()
+	previousStatus := application.Status
 	application.Status = models.ApplicationStatusWithdrawn
-	application.WithdrawnAt = &now
 
-	return s.repo.Update(ctx, application)
+	updated, err := s.repo.UpdateApplicationStatus(ctx, application, previousStatus)
+	if err != nil {
+		return err
+	}
+	if !updated {
+		return ErrInvalidStatusTransition
+	}
+	return nil
 }
 
 func isWithdrawableApplicationStatus(status models.InternshipApplicationStatus) bool {
-	switch status {
-	case models.ApplicationStatusSubmitted,
-		models.ApplicationStatusReviewing,
-		models.ApplicationStatusShortlisted:
-		return true
-	default:
-		return false
-	}
+	return status == models.ApplicationStatusSubmitted
 }
 
 func isKnownApplicationStatus(status models.InternshipApplicationStatus) bool {
 	switch status {
 	case models.ApplicationStatusSubmitted,
-		models.ApplicationStatusReviewing,
-		models.ApplicationStatusShortlisted,
 		models.ApplicationStatusRejected,
 		models.ApplicationStatusAccepted,
 		models.ApplicationStatusWithdrawn:
@@ -584,43 +569,27 @@ func isKnownApplicationStatus(status models.InternshipApplicationStatus) bool {
 	}
 }
 
-func statusesForStudentApplicationFilter(
-	filter StudentApplicationStatusFilter,
-) ([]models.InternshipApplicationStatus, error) {
-	switch filter {
-	case "":
+func statusesForStudentApplicationFilter(status models.InternshipApplicationStatus) ([]models.InternshipApplicationStatus, error) {
+	if status == "" {
 		return nil, nil
-	case StudentApplicationFilterPending:
-		return []models.InternshipApplicationStatus{
-			models.ApplicationStatusSubmitted,
-			models.ApplicationStatusReviewing,
-			models.ApplicationStatusShortlisted,
-		}, nil
-	case StudentApplicationFilterAccepted:
-		return []models.InternshipApplicationStatus{models.ApplicationStatusAccepted}, nil
-	case StudentApplicationFilterRejected:
-		return []models.InternshipApplicationStatus{models.ApplicationStatusRejected}, nil
-	default:
-		return nil, fmt.Errorf("%w: invalid student application status filter", ErrInvalidApplicationData)
 	}
+	if !isKnownApplicationStatus(status) {
+		return nil, fmt.Errorf("%w: invalid application status", ErrInvalidApplicationData)
+	}
+	return []models.InternshipApplicationStatus{status}, nil
 }
 
-func mapStudentApplications(applications []models.InternshipApplication) []StudentApplicationSummary {
+func (s *InternshipApplicationService) mapStudentApplications(ctx context.Context, applications []models.InternshipApplication) []StudentApplicationSummary {
 	mapped := make([]StudentApplicationSummary, len(applications))
 	for i := range applications {
 		application := &applications[i]
 		mapped[i] = StudentApplicationSummary{
-			ID:            application.ID,
-			InternshipID:  application.InternshipID,
-			Status:        application.Status,
-			EmployerNote:  application.EmployerNote,
-			AppliedAt:     application.AppliedAt,
-			ReviewedAt:    application.ReviewedAt,
-			ShortlistedAt: application.ShortlistedAt,
-			AcceptedAt:    application.AcceptedAt,
-			RejectedAt:    application.RejectedAt,
-			WithdrawnAt:   application.WithdrawnAt,
-			UpdatedAt:     application.UpdatedAt,
+			ID:           application.ID,
+			InternshipID: application.InternshipID,
+			Status:       application.Status,
+			EmployerNote: application.EmployerNote,
+			AppliedAt:    application.AppliedAt,
+			UpdatedAt:    application.UpdatedAt,
 		}
 		if application.Internship != nil {
 			mapped[i].Internship = &StudentApplicationInternship{
@@ -632,7 +601,9 @@ func mapStudentApplications(applications []models.InternshipApplication) []Stude
 				Duration:       application.Internship.Duration,
 				DurationUnit:   application.Internship.DurationUnit,
 			}
-			mapped[i].Internship.OrganizationName = application.Internship.Issuer.OrganizationName
+			issuer := application.Internship.Issuer
+			mapped[i].Internship.OrganizationName = issuer.OrganizationName
+			mapped[i].Internship.OrganizationLogo = s.profiles.listingLogoURL(ctx, issuer.OrganizationLogo)
 		}
 	}
 	return mapped
@@ -678,19 +649,14 @@ func mapRecruiterApplications(applications []models.InternshipApplication) []Rec
 
 func mapRecruiterApplication(application *models.InternshipApplication) RecruiterApplication {
 	mapped := RecruiterApplication{
-		ID:            application.ID,
-		InternshipID:  application.InternshipID,
-		StudentID:     application.StudentID,
-		Status:        application.Status,
-		EmployerNote:  application.EmployerNote,
-		AppliedAt:     application.AppliedAt,
-		ReviewedAt:    application.ReviewedAt,
-		ShortlistedAt: application.ShortlistedAt,
-		AcceptedAt:    application.AcceptedAt,
-		RejectedAt:    application.RejectedAt,
-		WithdrawnAt:   application.WithdrawnAt,
-		CreatedAt:     application.CreatedAt,
-		UpdatedAt:     application.UpdatedAt,
+		ID:           application.ID,
+		InternshipID: application.InternshipID,
+		StudentID:    application.StudentID,
+		Status:       application.Status,
+		EmployerNote: application.EmployerNote,
+		AppliedAt:    application.AppliedAt,
+		CreatedAt:    application.CreatedAt,
+		UpdatedAt:    application.UpdatedAt,
 	}
 	if application.Student != nil {
 		mapped.Student = &RecruiterCandidate{
@@ -704,7 +670,6 @@ func mapRecruiterApplication(application *models.InternshipApplication) Recruite
 			FacultyOrMajor:  application.Student.FacultyOrMajor,
 			CurrentSemester: application.Student.CurrentSemester,
 			GraduationYear:  application.Student.GraduationYear,
-			Availability:    application.Student.Availability,
 			LinkedinURL:     application.Student.LinkedinURL,
 			GithubURL:       application.Student.GithubURL,
 			PortfolioURL:    application.Student.PortfolioURL,

@@ -2,9 +2,11 @@ package repositories
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 )
@@ -13,19 +15,12 @@ type StudentRepository struct {
 	DB *gorm.DB
 }
 
-// StudentApplicationStats is the dashboard-facing summary of a student's
-// internship applications. Active applications are all non-final applications
-// (submitted, reviewing, or shortlisted), while pending applications are those
-// that have only been submitted.
 type StudentApplicationStats struct {
-	TotalApplications       int64 `json:"total_applications"`
-	ActiveApplications      int64 `json:"active_applications"`
-	ApprovedApplications    int64 `json:"approved_applications"`
-	RejectedApplications    int64 `json:"rejected_applications"`
-	PendingApplications     int64 `json:"pending_applications"`
-	UnderReviewApplications int64 `json:"under_review_applications"`
-	ShortlistedApplications int64 `json:"shortlisted_applications"`
-	WithdrawnApplications   int64 `json:"withdrawn_applications"`
+	TotalApplications     int64 `json:"total_applications"`
+	PendingApplications   int64 `json:"pending_applications"`
+	ApprovedApplications  int64 `json:"approved_applications"`
+	RejectedApplications  int64 `json:"rejected_applications"`
+	WithdrawnApplications int64 `json:"withdrawn_applications"`
 }
 
 func NewStudentRepository(db *gorm.DB) *StudentRepository {
@@ -46,8 +41,12 @@ func (r *StudentRepository) ResolveProfileID(
 	return profile.ID, nil
 }
 func (r *StudentRepository) GetByUserID(userID uuid.UUID) (*models.StudentProfile, error) {
+	return r.GetByUserIDContext(context.Background(), userID)
+}
+
+func (r *StudentRepository) GetByUserIDContext(ctx context.Context, userID uuid.UUID) (*models.StudentProfile, error) {
 	var p models.StudentProfile
-	if err := r.DB.Where("user_id = ?", userID).First(&p).Error; err != nil {
+	if err := r.DB.WithContext(ctx).Where("user_id = ?", userID).First(&p).Error; err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -59,32 +58,12 @@ func (r *StudentRepository) GetApplicationStats(
 ) (*StudentApplicationStats, error) {
 	var stats StudentApplicationStats
 
-	err := r.DB.
-		WithContext(ctx).
-		Model(&models.InternshipApplication{}).
-		Where("student_id = ?", profileID).
-		Select(`
-			COUNT(*) AS total_applications,
-			COALESCE(SUM(CASE WHEN status IN (?, ?, ?) THEN 1 ELSE 0 END), 0) AS active_applications,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS approved_applications,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS rejected_applications,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS pending_applications,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS under_review_applications,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS shortlisted_applications,
-			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0) AS withdrawn_applications
-		`,
-			models.ApplicationStatusSubmitted,
-			models.ApplicationStatusReviewing,
-			models.ApplicationStatusShortlisted,
-			models.ApplicationStatusAccepted,
-			models.ApplicationStatusRejected,
-			models.ApplicationStatusSubmitted,
-			models.ApplicationStatusReviewing,
-			models.ApplicationStatusShortlisted,
-			models.ApplicationStatusWithdrawn,
-		).
-		Scan(&stats).
-		Error
+	err := r.DB.WithContext(ctx).Model(&models.InternshipApplication{}).Where("student_id = ?", profileID).
+		Select(`COUNT(*) AS total_applications,
+ COALESCE(SUM(CASE WHEN status = 'submitted' THEN 1 ELSE 0 END), 0) AS pending_applications,
+ COALESCE(SUM(CASE WHEN status = 'accepted' THEN 1 ELSE 0 END), 0) AS approved_applications,
+ COALESCE(SUM(CASE WHEN status = 'rejected' THEN 1 ELSE 0 END), 0) AS rejected_applications,
+ COALESCE(SUM(CASE WHEN status = 'withdrawn' THEN 1 ELSE 0 END), 0) AS withdrawn_applications`).Scan(&stats).Error
 	if err != nil {
 		return nil, err
 	}
@@ -92,93 +71,84 @@ func (r *StudentRepository) GetApplicationStats(
 	return &stats, nil
 }
 
-func (r *StudentRepository) CreateOrUpdateProfile(p *models.StudentProfile) error {
+func (r *StudentRepository) CreateOrUpdateProfile(ctx context.Context, p *models.StudentProfile) error {
 	// Upsert by user_id
+	db := r.DB.WithContext(ctx)
 	var existing models.StudentProfile
-	if err := r.DB.Where("user_id = ?", p.UserID).First(&existing).Error; err == nil {
+	err := db.Where("user_id = ?", p.UserID).First(&existing).Error
+	if err == nil {
 		p.ID = existing.ID
 		p.CreatedAt = existing.CreatedAt
-		return r.DB.Save(p).Error
+		p.ProfilePictureKey = existing.ProfilePictureKey
+		result := db.Model(p).
+			Omit(clause.Associations, "ProfilePictureKey").Select("*").Updates(p)
+		if result.Error == nil && result.RowsAffected == 0 {
+			return gorm.ErrRecordNotFound
+		}
+		return result.Error
 	}
-	return r.DB.Create(p).Error
-}
-
-func (r *StudentRepository) AddEducation(e *models.StudentEducation) error {
-	return r.DB.Create(e).Error
-}
-
-func (r *StudentRepository) ListEducations(profileID uuid.UUID) ([]models.StudentEducation, error) {
-	var out []models.StudentEducation
-	if err := r.DB.Where("profile_id = ?", profileID).Find(&out).Error; err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (r *StudentRepository) AddSkill(s *models.StudentSkill) error {
-	return r.DB.Create(s).Error
-}
-
-func (r *StudentRepository) ListSkills(profileID uuid.UUID) ([]models.StudentSkill, error) {
-	var out []models.StudentSkill
-	if err := r.DB.Where("profile_id = ?", profileID).Find(&out).Error; err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (r *StudentRepository) AddProject(pj *models.StudentProject) error {
-	return r.DB.Create(pj).Error
-}
-
-func (r *StudentRepository) ListProjects(profileID uuid.UUID) ([]models.StudentProject, error) {
-	var out []models.StudentProject
-	if err := r.DB.Where("profile_id = ?", profileID).Find(&out).Error; err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (r *StudentRepository) AddCertification(c *models.StudentCertification) error {
-	return r.DB.Create(c).Error
-}
-
-func (r *StudentRepository) ListCertifications(profileID uuid.UUID) ([]models.StudentCertification, error) {
-	var out []models.StudentCertification
-	if err := r.DB.Where("profile_id = ?", profileID).Find(&out).Error; err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (r *StudentRepository) AddDocument(d *models.StudentDocument) error {
-	return r.DB.Create(d).Error
-}
-
-func (r *StudentRepository) ListDocuments(profileID uuid.UUID) ([]models.StudentDocument, error) {
-	var out []models.StudentDocument
-	if err := r.DB.Where("profile_id = ?", profileID).Order("is_default desc, created_at desc").Find(&out).Error; err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (r *StudentRepository) SetDefaultDocument(profileID, docID uuid.UUID) error {
-	// clear existing defaults
-	if err := r.DB.Model(&models.StudentDocument{}).Where("profile_id = ?", profileID).Update("is_default", false).Error; err != nil {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
-	return r.DB.Model(&models.StudentDocument{}).Where("id = ? AND profile_id = ?", docID, profileID).Update("is_default", true).Error
+	return db.Omit(clause.Associations).Create(p).Error
 }
 
-func (r *StudentRepository) DeleteDocumentByID(docID uuid.UUID) error {
-	return r.DB.Where("id = ?", docID).Delete(&models.StudentDocument{}).Error
+func (r *StudentRepository) UpdateProfilePicture(ctx context.Context, userID uuid.UUID, objectKey string) (string, error) {
+	var oldKey string
+	err := r.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var profile models.StudentProfile
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("user_id = ?", userID).First(&profile).Error; err != nil {
+			return err
+		}
+		oldKey = profile.ProfilePictureKey
+		return tx.Model(&profile).Update("profile_picture_key", objectKey).Error
+	})
+	return oldKey, err
 }
 
-func (r *StudentRepository) GetDocumentByID(docID uuid.UUID) (*models.StudentDocument, error) {
-	var d models.StudentDocument
-	if err := r.DB.First(&d, "id = ?", docID).Error; err != nil {
-		return nil, err
-	}
-	return &d, nil
+func (r *StudentRepository) GetByID(ctx context.Context, id uuid.UUID) (*models.StudentProfile, error) {
+	var student models.StudentProfile
+	err := r.DB.WithContext(ctx).First(&student, "id = ?", id).Error
+	return &student, err
+}
+
+// GetResume selects the latest CV; legacy document rows stay in the database.
+func (r *StudentRepository) GetResume(ctx context.Context, profileID uuid.UUID) (*models.StudentDocument, error) {
+	var resume models.StudentDocument
+	err := r.DB.WithContext(ctx).Where("profile_id = ?", profileID).Order("created_at DESC, id DESC").First(&resume).Error
+	return &resume, err
+}
+
+func (r *StudentRepository) SaveResume(ctx context.Context, resume *models.StudentDocument) (string, error) {
+	var oldKey string
+	err := r.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var profile models.StudentProfile
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&profile, "id = ? AND user_id = ?", resume.ProfileID, resume.UserID).Error; err != nil {
+			return err
+		}
+		existing, err := NewStudentRepository(tx).GetResume(ctx, profile.ID)
+		if err == nil {
+			resume.ID, resume.CreatedAt, oldKey = existing.ID, existing.CreatedAt, existing.ObjectKey
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Save(resume).Error
+	})
+	return oldKey, err
+}
+
+func (r *StudentRepository) DeleteResume(ctx context.Context, profileID, userID uuid.UUID) ([]models.StudentDocument, error) {
+	var documents []models.StudentDocument
+	err := r.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var profile models.StudentProfile
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&profile, "id = ? AND user_id = ?", profileID, userID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("profile_id = ?", profileID).Find(&documents).Error; err != nil {
+			return err
+		}
+		// Remove legacy CVs too so an older file cannot become the current CV.
+		return tx.Where("profile_id = ?", profileID).Delete(&models.StudentDocument{}).Error
+	})
+	return documents, err
 }

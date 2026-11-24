@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 
@@ -32,8 +33,6 @@ func TestStudentRepositoryGetApplicationStats(t *testing.T) {
 	statuses := []models.InternshipApplicationStatus{
 		models.ApplicationStatusSubmitted,
 		models.ApplicationStatusSubmitted,
-		models.ApplicationStatusReviewing,
-		models.ApplicationStatusShortlisted,
 		models.ApplicationStatusAccepted,
 		models.ApplicationStatusAccepted,
 		models.ApplicationStatusRejected,
@@ -55,14 +54,11 @@ func TestStudentRepositoryGetApplicationStats(t *testing.T) {
 	}
 
 	want := StudentApplicationStats{
-		TotalApplications:       8,
-		ActiveApplications:      4,
-		ApprovedApplications:    2,
-		RejectedApplications:    1,
-		PendingApplications:     2,
-		UnderReviewApplications: 1,
-		ShortlistedApplications: 1,
-		WithdrawnApplications:   1,
+		TotalApplications:     6,
+		ApprovedApplications:  2,
+		RejectedApplications:  1,
+		PendingApplications:   2,
+		WithdrawnApplications: 1,
 	}
 	if *stats != want {
 		t.Fatalf("stats = %+v, want %+v", *stats, want)
@@ -74,5 +70,71 @@ func TestStudentRepositoryGetApplicationStats(t *testing.T) {
 	}
 	if *emptyStats != (StudentApplicationStats{}) {
 		t.Fatalf("empty stats = %+v, want zero values", *emptyStats)
+	}
+}
+
+func TestSaveResumeReplacesCurrentCV(t *testing.T) {
+	db := openApplicationRepositoryTestDB(t)
+	student := createRepositoryTestStudent(t, db, "Student")
+	repo := NewStudentRepository(db)
+	ctx := context.Background()
+	first := &models.StudentDocument{ProfileID: student.ID, UserID: student.UserID, FileName: "first.pdf", ObjectKey: "first.pdf"}
+	if _, err := repo.SaveResume(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	replacement := &models.StudentDocument{ProfileID: student.ID, UserID: student.UserID, FileName: "replacement.pdf", ObjectKey: "replacement.pdf"}
+	oldKey, err := repo.SaveResume(ctx, replacement)
+	if err != nil || oldKey != "first.pdf" || replacement.ID != first.ID {
+		t.Fatalf("replacement: old=%s id=%s error=%v", oldKey, replacement.ID, err)
+	}
+	var count int64
+	if err := db.Model(&models.StudentDocument{}).Where("profile_id = ?", student.ID).Count(&count).Error; err != nil || count != 1 {
+		t.Fatalf("CV count=%d: %v", count, err)
+	}
+	if _, err := repo.SaveResume(ctx, &models.StudentDocument{ProfileID: student.ID, UserID: uuid.New(), ObjectKey: "other.pdf"}); err == nil {
+		t.Fatal("another user replaced the CV")
+	}
+	current, err := repo.GetResume(ctx, student.ID)
+	if err != nil || current.ObjectKey != "replacement.pdf" {
+		t.Fatalf("CV=%+v: %v", current, err)
+	}
+}
+
+func TestDeleteResumeRemovesLegacyCVsAndChecksOwnership(t *testing.T) {
+	db := openApplicationRepositoryTestDB(t)
+	student := createRepositoryTestStudent(t, db, "Student")
+	other := createRepositoryTestStudent(t, db, "Other student")
+	repo := NewStudentRepository(db)
+	ctx := context.Background()
+	for _, document := range []models.StudentDocument{
+		{ProfileID: student.ID, UserID: student.UserID, FileName: "old.pdf", ObjectKey: "old.pdf"},
+		{ProfileID: student.ID, UserID: student.UserID, FileName: "current.pdf", ObjectKey: "current.pdf"},
+		{ProfileID: other.ID, UserID: other.UserID, FileName: "other.pdf", ObjectKey: "other.pdf"},
+	} {
+		if err := db.Create(&document).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := repo.DeleteResume(ctx, student.ID, other.UserID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("another user deleted the CV: %v", err)
+	}
+	documents, err := repo.DeleteResume(ctx, student.ID, student.UserID)
+	if err != nil || len(documents) != 2 {
+		t.Fatalf("deleted documents=%v: %v", documents, err)
+	}
+	if _, err := repo.GetResume(ctx, student.ID); !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("deleted CV fell back to a legacy file: %v", err)
+	}
+	if document, err := repo.GetResume(ctx, other.ID); err != nil || document.ObjectKey != "other.pdf" {
+		t.Fatalf("other student's CV changed: %v, %v", document, err)
+	}
+	if documents, err := repo.DeleteResume(ctx, student.ID, student.UserID); err != nil || len(documents) != 0 {
+		t.Fatalf("repeat deletion: %v, %v", documents, err)
+	}
+	if _, err := repo.SaveResume(ctx, &models.StudentDocument{ProfileID: student.ID, UserID: student.UserID, FileName: "new.pdf", ObjectKey: "new.pdf"}); err != nil {
+		t.Fatalf("upload after deletion: %v", err)
+	}
+	if document, err := repo.GetResume(ctx, student.ID); err != nil || document.ObjectKey != "new.pdf" {
+		t.Fatalf("new CV unavailable: %v, %v", document, err)
 	}
 }

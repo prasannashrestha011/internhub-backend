@@ -48,10 +48,9 @@ func (h *ApplicationHandler) Apply(c *gin.Context) {
 
 	app := &models.InternshipApplication{
 		InternshipID: internshipID,
-		StudentID:    uid,
 	}
 
-	if err := h.Svc.CreateApplication(c.Request.Context(), app); err != nil {
+	if err := h.Svc.CreateApplication(c.Request.Context(), uid, app); err != nil {
 		h.handleApplicationError(c, err)
 		return
 	}
@@ -69,7 +68,7 @@ func (h *ApplicationHandler) ListOwn(c *gin.Context) {
 
 	page, pageSize := parsePaginationParams(c)
 	filter := services.StudentApplicationFilter{
-		Status:   services.StudentApplicationStatusFilter(strings.TrimSpace(c.Query("status"))),
+		Status:   models.InternshipApplicationStatus(strings.TrimSpace(c.Query("status"))),
 		Page:     page,
 		PageSize: pageSize,
 	}

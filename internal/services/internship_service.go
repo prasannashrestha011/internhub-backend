@@ -20,12 +20,13 @@ var (
 )
 
 type InternshipService struct {
+	profiles      *RecruiterProfileService
 	repo          *repositories.InternshipRepository
 	recruiterRepo *repositories.RecruiterProfileRepository
 }
 
-func NewInternshipService(repo *repositories.InternshipRepository, recruiterRepo *repositories.RecruiterProfileRepository) *InternshipService {
-	return &InternshipService{repo: repo, recruiterRepo: recruiterRepo}
+func NewInternshipService(repo *repositories.InternshipRepository, recruiterRepo *repositories.RecruiterProfileRepository, profiles *RecruiterProfileService) *InternshipService {
+	return &InternshipService{repo: repo, recruiterRepo: recruiterRepo, profiles: profiles}
 }
 
 func (s *InternshipService) CreateInternship(ctx context.Context, internship *models.Internship) error {
@@ -38,7 +39,10 @@ func (s *InternshipService) CreateInternship(ctx context.Context, internship *mo
 	if err := validateInternship(internship); err != nil {
 		return err
 	}
-	recruiterProfile, err := s.recruiterRepo.GetByUserID(ctx, internship.IssuedBy)
+	_, err := s.recruiterRepo.GetByUserID(ctx, internship.IssuedBy)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return fmt.Errorf("%w: complete your company profile before creating an internship", ErrInvalidInternshipData)
+	}
 	if err != nil {
 		return fmt.Errorf("get recruiter profile: %w", err)
 	}
@@ -48,10 +52,6 @@ func (s *InternshipService) CreateInternship(ctx context.Context, internship *mo
 	if !internship.Status.IsValid() {
 		return fmt.Errorf("%w: invalid internship status", ErrInvalidInternshipData)
 	}
-	if recruiterProfile.VerificationStatus != string(enums.OrganizationVerificationApproved) {
-		internship.Status = enums.InternshipStatusPrivate
-	}
-	internship.IsActive = internship.Status.IsActive()
 
 	if internship.StipendCurrency == "" {
 		internship.StipendCurrency = "NPR"
@@ -74,7 +74,7 @@ func (s *InternshipService) UpdateInternship(ctx context.Context, internship *mo
 	if err != nil {
 		return err
 	}
-	recruiterProfile, err := s.recruiterRepo.GetByUserID(ctx, existing.IssuedBy)
+	_, err = s.recruiterRepo.GetByUserID(ctx, existing.IssuedBy)
 	if err != nil {
 		return fmt.Errorf("get recruiter profile: %w", err)
 	}
@@ -86,10 +86,6 @@ func (s *InternshipService) UpdateInternship(ctx context.Context, internship *mo
 	if !internship.Status.IsValid() {
 		return fmt.Errorf("%w: invalid internship status", ErrInvalidInternshipData)
 	}
-	if recruiterProfile.VerificationStatus != string(enums.OrganizationVerificationApproved) {
-		internship.Status = enums.InternshipStatusPrivate
-	}
-	internship.IsActive = internship.Status.IsActive()
 	return s.repo.Update(ctx, internship)
 }
 
@@ -102,6 +98,18 @@ func (s *InternshipService) GetInternship(ctx context.Context, id uuid.UUID) (*m
 		return nil, ErrInternshipNotFound
 	}
 	return internship, err
+}
+
+func (s *InternshipService) GetInternshipDetail(ctx context.Context, id uuid.UUID) (*models.Internship, error) {
+	internship, err := s.GetInternship(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.repo.LoadPublicIssuer(ctx, internship); err != nil {
+		return nil, err
+	}
+	internship.Issuer.OrganizationLogo = s.profiles.listingLogoURL(ctx, internship.Issuer.OrganizationLogo)
+	return internship, nil
 }
 
 func (s *InternshipService) DeleteInternship(ctx context.Context, id uuid.UUID) error {
@@ -123,9 +131,13 @@ func (s *InternshipService) ListByEmployer(ctx context.Context, employerID uuid.
 
 func (s *InternshipService) SearchInternships(ctx context.Context, filter repositories.InternshipSearchFilter) ([]models.Internship, int64, error) {
 	filter.Status = enums.InternshipStatusPublished
-	isActive := true
-	filter.IsActive = &isActive
-	return s.repo.Search(ctx, filter)
+	filter.ExcludeExpired = true
+	internships, total, err := s.repo.Search(ctx, filter)
+	for i := range internships {
+		issuer := &internships[i].Issuer
+		issuer.OrganizationLogo = s.profiles.listingLogoURL(ctx, issuer.OrganizationLogo)
+	}
+	return internships, total, err
 }
 
 func validateInternship(internship *models.Internship) error {

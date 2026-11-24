@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -47,7 +48,6 @@ func (r *InternshipApplicationRepository) GetByID(ctx context.Context, id uuid.U
 	if err := r.db.WithContext(ctx).
 		Preload("Internship").
 		Preload("Student").
-		Preload("Student.Documents", "is_default = ?", true).
 		First(&out, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
@@ -113,7 +113,6 @@ func (r *InternshipApplicationRepository) ListByInternship(ctx context.Context, 
 
 	off, limit := getPagination(page, pageSize)
 	err := query.Preload("Student").
-		Preload("Student.Documents", "is_default = ?", true).
 		Order("applied_at DESC").
 		Offset(off).
 		Limit(limit).
@@ -167,6 +166,9 @@ func (r *InternshipApplicationRepository) ListForEmployer(
 	return out, total, err
 }
 
-func (r *InternshipApplicationRepository) Update(ctx context.Context, a *models.InternshipApplication) error {
-	return r.db.WithContext(ctx).Save(a).Error
+// UpdateApplicationStatus compares the previous status to prevent concurrent reviews/withdrawals from undoing acceptance.
+func (r *InternshipApplicationRepository) UpdateApplicationStatus(ctx context.Context, app *models.InternshipApplication, previous models.InternshipApplicationStatus) (bool, error) {
+	result := r.db.WithContext(ctx).Model(&models.InternshipApplication{}).Where("id = ? AND status = ?", app.ID, previous).
+		Updates(map[string]interface{}{"status": app.Status, "employer_note": app.EmployerNote, "updated_at": time.Now()})
+	return result.RowsAffected == 1, result.Error
 }

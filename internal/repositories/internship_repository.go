@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/prasanna/student-job-portal/backend/internal/enums"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
@@ -27,7 +28,6 @@ type InternshipSearchFilter struct {
 	WorkMode       string // onsite, remote, hybrid
 	InternshipType string // paid, unpaid
 	Status         enums.InternshipStatus
-	IsActive       *bool
 	MinStipend     *float64
 	ExcludeExpired bool
 	Page           int
@@ -36,12 +36,12 @@ type InternshipSearchFilter struct {
 
 // Create inserts a new Internship record.
 func (r *InternshipRepository) Create(ctx context.Context, i *models.Internship) error {
-	return r.db.WithContext(ctx).Create(i).Error
+	return r.db.WithContext(ctx).Omit(clause.Associations).Create(i).Error
 }
 
 // Update saves all modified fields of an Internship record.
 func (r *InternshipRepository) Update(ctx context.Context, i *models.Internship) error {
-	return r.db.WithContext(ctx).Save(i).Error
+	return r.db.WithContext(ctx).Omit(clause.Associations).Save(i).Error
 }
 
 // GetByID fetches a single internship by ID.
@@ -52,6 +52,12 @@ func (r *InternshipRepository) GetByID(ctx context.Context, id uuid.UUID) (*mode
 		return nil, err
 	}
 	return &internship, nil
+}
+
+func (r *InternshipRepository) LoadPublicIssuer(ctx context.Context, internship *models.Internship) error {
+	return r.db.WithContext(ctx).Model(internship).
+		Select("id", "user_id", "organization_name", "organization_logo", "organization_about", "organization_website").
+		Association("Issuer").Find(&internship.Issuer)
 }
 
 // DeleteByID removes an internship record by ID.
@@ -79,21 +85,17 @@ func (r *InternshipRepository) ListByEmployer(ctx context.Context, employerID uu
 	return internships, total, err
 }
 
-/*
-Search executes advanced dynamic filtering and pagination for internships.
-It ensures that only internships from approved recruiters are returned.
-*/
+// Search executes dynamic filtering and pagination for internships with a company profile.
 func (r *InternshipRepository) Search(ctx context.Context, filter InternshipSearchFilter) ([]models.Internship, int64, error) {
 	var internships []models.Internship
 	var total int64
 
 	query := r.db.WithContext(ctx).Model(&models.Internship{}).
-		Joins("JOIN recruiter_profiles ON recruiter_profiles.user_id = internships.issued_by").
-		Where("recruiter_profiles.verification_status = ?", enums.OrganizationVerificationApproved)
+		Joins("JOIN recruiter_profiles ON recruiter_profiles.user_id = internships.issued_by")
 
 	if filter.Query != "" {
 		like := "%" + filter.Query + "%"
-		query = query.Where("title ILIKE ? OR description ILIKE ? OR required_skills ILIKE ?", like, like, like)
+		query = query.Where("LOWER(title) LIKE LOWER(?) OR LOWER(description) LIKE LOWER(?) OR LOWER(required_skills) LIKE LOWER(?)", like, like, like)
 	}
 
 	if filter.EmployerID != nil {
@@ -101,7 +103,7 @@ func (r *InternshipRepository) Search(ctx context.Context, filter InternshipSear
 	}
 
 	if filter.Location != "" {
-		query = query.Where("location ILIKE ?", "%"+filter.Location+"%")
+		query = query.Where("LOWER(location) LIKE LOWER(?)", "%"+filter.Location+"%")
 	}
 
 	if filter.WorkMode != "" {
@@ -114,10 +116,6 @@ func (r *InternshipRepository) Search(ctx context.Context, filter InternshipSear
 
 	if filter.Status != "" {
 		query = query.Where("status = ?", filter.Status)
-	}
-
-	if filter.IsActive != nil {
-		query = query.Where("is_active = ?", *filter.IsActive)
 	}
 
 	if filter.MinStipend != nil {
@@ -134,7 +132,7 @@ func (r *InternshipRepository) Search(ctx context.Context, filter InternshipSear
 
 	off, limit := getPagination(filter.Page, filter.PageSize)
 
-	err := query.Preload("Issuer").Order("created_at DESC").
+	err := query.Preload("Issuer").Order("internships.created_at DESC").
 		Offset(off).
 		Limit(limit).
 		Find(&internships).Error

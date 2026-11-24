@@ -28,7 +28,7 @@ func TestInternshipApplicationRepositoryListForEmployer(t *testing.T) {
 	baseTime := time.Now().Add(-time.Hour)
 	createRepositoryTestApplication(t, db, firstInternship.ID, alice.ID, models.ApplicationStatusSubmitted, baseTime)
 	newest := createRepositoryTestApplication(t, db, secondInternship.ID, bob.ID, models.ApplicationStatusRejected, baseTime.Add(30*time.Minute))
-	createRepositoryTestApplication(t, db, otherInternship.ID, alice.ID, models.ApplicationStatusReviewing, baseTime.Add(45*time.Minute))
+	createRepositoryTestApplication(t, db, otherInternship.ID, alice.ID, models.ApplicationStatusSubmitted, baseTime.Add(45*time.Minute))
 
 	repo := NewInternshipApplicationRepository(db)
 	ctx := context.Background()
@@ -128,7 +128,7 @@ func TestInternshipApplicationRepositoryListByStudent(t *testing.T) {
 	otherInternship := createRepositoryTestInternship(t, db, employerID, "Data Intern")
 
 	createRepositoryTestApplication(t, db, submittedInternship.ID, student.ID, models.ApplicationStatusSubmitted, baseTime)
-	newestPending := createRepositoryTestApplication(t, db, reviewingInternship.ID, student.ID, models.ApplicationStatusReviewing, baseTime.Add(time.Hour))
+	newestPending := createRepositoryTestApplication(t, db, reviewingInternship.ID, student.ID, models.ApplicationStatusSubmitted, baseTime.Add(time.Hour))
 	createRepositoryTestApplication(t, db, acceptedInternship.ID, student.ID, models.ApplicationStatusAccepted, baseTime.Add(30*time.Minute))
 	createRepositoryTestApplication(t, db, otherInternship.ID, otherStudent.ID, models.ApplicationStatusRejected, baseTime.Add(90*time.Minute))
 
@@ -137,8 +137,6 @@ func TestInternshipApplicationRepositoryListByStudent(t *testing.T) {
 		StudentID: student.ID,
 		Statuses: []models.InternshipApplicationStatus{
 			models.ApplicationStatusSubmitted,
-			models.ApplicationStatusReviewing,
-			models.ApplicationStatusShortlisted,
 		},
 		Page:     1,
 		PageSize: 1,
@@ -198,7 +196,6 @@ func createRepositoryTestInternship(t *testing.T, db *gorm.DB, employerID uuid.U
 		WorkMode:       "remote",
 		InternshipType: "paid",
 		Status:         enums.InternshipStatusPublished,
-		IsActive:       true,
 	}
 	if err := db.Omit("Issuer").Create(internship).Error; err != nil {
 		t.Fatalf("create internship: %v", err)

@@ -190,9 +190,10 @@ func (h *RecruiterProfileHandler) UploadOrganizationLogo(c *gin.Context) {
 		return
 	}
 
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, (5<<20)+(1<<20))
 	file, err := c.FormFile("logo")
 	if err != nil {
-		responses.Error(c, http.StatusBadRequest, "organization logo is required")
+		responses.Error(c, http.StatusBadRequest, services.ErrInvalidProfilePicture.Error())
 		return
 	}
 
@@ -229,7 +230,7 @@ func (h *RecruiterProfileHandler) UploadOrganizationLogo(c *gin.Context) {
 // It returns true when it has written a response.
 func writeRecruiterProfileError(c *gin.Context, err error, fallback string) bool {
 	switch {
-	case errors.Is(err, services.ErrInvalidRecruiterProfileData):
+	case errors.Is(err, services.ErrInvalidRecruiterProfileData), errors.Is(err, services.ErrInvalidProfilePicture):
 		responses.Error(c, http.StatusBadRequest, err.Error())
 	case errors.Is(err, services.ErrRecruiterProfileNotFound):
 		responses.Error(c, http.StatusNotFound, "recruiter profile not found")

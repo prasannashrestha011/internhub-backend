@@ -21,10 +21,11 @@ type AuthService struct {
 	Repo   *repositories.UserRepository
 	Cfg    *config.Config
 	Logger *logger.Logger
+	Sender VerificationSender
 }
 
 func NewAuthService(repo *repositories.UserRepository, cfg *config.Config, l *logger.Logger) *AuthService {
-	return &AuthService{Repo: repo, Cfg: cfg, Logger: l}
+	return &AuthService{Repo: repo, Cfg: cfg, Logger: l, Sender: SMTPVerificationSender{Config: cfg.Email}}
 }
 
 // HashPassword hashes the plaintext password using bcrypt
@@ -44,6 +45,9 @@ func (s *AuthService) ComparePassword(hash, password string) error {
 
 // GenerateAccessToken creates a signed JWT access token
 func (s *AuthService) GenerateAccessToken(user *models.User) (string, error) {
+	if !user.CanSignIn() {
+		return "", ErrEmailNotVerified
+	}
 	claims := jwt.MapClaims{
 		"sub":  user.ID.String(),
 		"role": user.Role,
@@ -61,6 +65,9 @@ func (s *AuthService) GenerateAccessToken(user *models.User) (string, error) {
 
 // GenerateRefreshToken creates a secure random refresh token string and persists its hash
 func (s *AuthService) GenerateRefreshToken(user *models.User) (string, error) {
+	if !user.CanSignIn() {
+		return "", ErrEmailNotVerified
+	}
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		s.Logger.Error("failed to read random bytes: %v", err)

@@ -31,7 +31,6 @@ func JWTAuthMiddleware(cfg *config.Config, l *logger.Logger) gin.HandlerFunc {
 				}
 			}
 		}
-		log.Println("JWTAuthMiddleware: tokenStr:", tokenStr)
 
 		// 3. Reject if no token was found in either cookie or header
 		if tokenStr == "" {

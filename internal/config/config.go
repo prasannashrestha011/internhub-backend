@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net/mail"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -14,6 +16,33 @@ type Config struct {
 	JWT      JWTConfig
 	MinIO    MinIOConfig
 	Server   ServerConfig
+	Email    EmailConfig
+}
+
+type EmailConfig struct {
+	Host      string
+	Port      string
+	Username  string
+	Password  string
+	From      string
+	OTPSecret string
+}
+
+func (e EmailConfig) Validate() error {
+	if e.Host == "" || strings.ContainsAny(e.Host, "\r\n /:") || e.Username == "" || e.Password == "" {
+		return fmt.Errorf("SMTP_HOST, SMTP_USERNAME and SMTP_PASSWORD are required")
+	}
+	if e.Port != "465" && e.Port != "587" {
+		return fmt.Errorf("SMTP_PORT must be 465 (TLS) or 587 (STARTTLS)")
+	}
+	address, err := mail.ParseAddress(e.From)
+	if err != nil || address.Address != e.From || strings.ContainsAny(e.From, "\r\n") {
+		return fmt.Errorf("SMTP_FROM must be a plain approved sender email address")
+	}
+	if len(e.OTPSecret) < 32 {
+		return fmt.Errorf("EMAIL_OTP_SECRET must contain at least 32 characters")
+	}
+	return nil
 }
 
 type AppConfig struct {
@@ -32,27 +61,22 @@ type DatabaseConfig struct {
 
 type JWTConfig struct {
 	AccessSecret  string
-	RefreshSecret string
 	AccessExpiry  time.Duration
 	RefreshExpiry time.Duration
 }
 
 type MinIOConfig struct {
-	Endpoint               string
-	AccessKey              string
-	SecretKey              string
-	UseSSL                 bool
-	ProfileBucket          string
-	OrganizationLogoBucket string
-	StudentDocBucket       string
-	CompanyLogoBucket      string
-	CompanyDocBucket       string
+	Endpoint         string
+	AccessKey        string
+	SecretKey        string
+	UseSSL           bool
+	ProfileBucket    string
+	StudentDocBucket string
 }
 
 type ServerConfig struct {
 	ReadTimeout  time.Duration
 	WriteTimeout time.Duration
-	MaxBodySize  int64
 }
 
 func Load() (*Config, error) {
@@ -74,25 +98,28 @@ func Load() (*Config, error) {
 		},
 		JWT: JWTConfig{
 			AccessSecret:  getEnv("JWT_ACCESS_SECRET", ""),
-			RefreshSecret: getEnv("JWT_REFRESH_SECRET", ""),
 			AccessExpiry:  parseDuration(getEnv("JWT_ACCESS_EXPIRY", "15m")),
 			RefreshExpiry: parseDuration(getEnv("JWT_REFRESH_EXPIRY", "168h")),
 		},
 		MinIO: MinIOConfig{
-			Endpoint:               getEnv("MINIO_ENDPOINT", "localhost:9000"),
-			AccessKey:              getEnv("MINIO_ACCESS_KEY", ""),
-			SecretKey:              getEnv("MINIO_SECRET_KEY", ""),
-			UseSSL:                 getEnv("MINIO_USE_SSL", "false") == "true",
-			ProfileBucket:          getEnv("MINIO_PROFILE_BUCKET", "profile-images"),
-			OrganizationLogoBucket: getEnv("MINIO_ORGANIZATION_LOGO_BUCKET", "organization-logos"),
-			StudentDocBucket:       getEnv("MINIO_STUDENT_DOCUMENT_BUCKET", "student-documents"),
-			CompanyLogoBucket:      getEnv("MINIO_COMPANY_LOGO_BUCKET", "company-logos"),
-			CompanyDocBucket:       getEnv("MINIO_COMPANY_DOCUMENT_BUCKET", "company-documents"),
+			Endpoint:         getEnv("MINIO_ENDPOINT", "localhost:9000"),
+			AccessKey:        getEnv("MINIO_ACCESS_KEY", ""),
+			SecretKey:        getEnv("MINIO_SECRET_KEY", ""),
+			UseSSL:           getEnv("MINIO_USE_SSL", "false") == "true",
+			ProfileBucket:    getEnv("MINIO_PROFILE_BUCKET", "profile-images"),
+			StudentDocBucket: getEnv("MINIO_STUDENT_DOCUMENT_BUCKET", "student-documents"),
 		},
 		Server: ServerConfig{
 			ReadTimeout:  15 * time.Second,
 			WriteTimeout: 15 * time.Second,
-			MaxBodySize:  50 * 1024 * 1024, // 50MB
+		},
+		Email: EmailConfig{
+			Host:      getEnv("SMTP_HOST", ""),
+			Port:      getEnv("SMTP_PORT", "587"),
+			Username:  getEnv("SMTP_USERNAME", ""),
+			Password:  getEnv("SMTP_PASSWORD", ""),
+			From:      getEnv("SMTP_FROM", ""),
+			OTPSecret: getEnv("EMAIL_OTP_SECRET", ""),
 		},
 	}
 
@@ -116,14 +143,16 @@ func (c *Config) Validate() error {
 	if c.JWT.AccessSecret == "" {
 		return fmt.Errorf("JWT_ACCESS_SECRET is required")
 	}
-	if c.JWT.RefreshSecret == "" {
-		return fmt.Errorf("JWT_REFRESH_SECRET is required")
-	}
 	if c.MinIO.AccessKey == "" {
 		return fmt.Errorf("MINIO_ACCESS_KEY is required")
 	}
 	if c.MinIO.SecretKey == "" {
 		return fmt.Errorf("MINIO_SECRET_KEY is required")
+	}
+	if c.App.Env == "production" || c.Email.Host != "" || c.Email.Username != "" || c.Email.Password != "" || c.Email.From != "" || c.Email.OTPSecret != "" {
+		if err := c.Email.Validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

@@ -23,14 +23,13 @@ func NewRecruiterProfileRepository(db *gorm.DB) *RecruiterProfileRepository {
 // Upsert creates a new recruiter profile or updates the existing
 // organization/profile information when user_id already exists.
 func (r *RecruiterProfileRepository) Upsert(ctx context.Context, profile *models.RecruiterProfile) error {
-	return r.DB.Clauses(clause.OnConflict{
+	return r.DB.WithContext(ctx).Omit(clause.Associations).Clauses(clause.OnConflict{
 		Columns: []clause.Column{
 			{Name: "user_id"},
 		},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"organization_name",
 			"designation",
-			"organization_logo",
 			"organization_website",
 			"organization_address",
 			"organization_about",
@@ -51,7 +50,6 @@ func (r *RecruiterProfileRepository) GetByUserID(
 
 	err := r.DB.
 		Preload("User").
-		Preload("Verification").
 		Where("user_id = ?", userID).
 		First(&profile).
 		Error
@@ -78,28 +76,6 @@ func (r *RecruiterProfileRepository) GetByID(
 	}
 
 	return &profile, nil
-}
-
-func (r *RecruiterProfileRepository) UpdateEmployeeVerification(ctx context.Context, userID uuid.UUID, isVerified bool) error {
-	return r.DB.Model(&models.RecruiterProfile{}).
-		Where("user_id = ?", userID).
-		Update("verification_status", isVerified).
-		Error
-}
-
-// UpdateVerificationStatus keeps the profile-level status in sync with the
-// associated organization verification review.
-func (r *RecruiterProfileRepository) UpdateVerificationStatus(
-	ctx context.Context,
-	recruiterProfileID uuid.UUID,
-	status string,
-) error {
-	return r.DB.
-		WithContext(ctx).
-		Model(&models.RecruiterProfile{}).
-		Where("id = ?", recruiterProfileID).
-		Update("verification_status", status).
-		Error
 }
 
 // DeleteByUserID removes an recruiter profile associated with the given user.

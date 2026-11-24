@@ -18,40 +18,13 @@ import (
 )
 
 func TestIsValidEmployerStatusTransition(t *testing.T) {
-	tests := []struct {
-		name    string
-		current models.InternshipApplicationStatus
-		next    models.InternshipApplicationStatus
-		want    bool
-	}{
-		{"submitted to reviewing", models.ApplicationStatusSubmitted, models.ApplicationStatusReviewing, true},
-		{"submitted to shortlisted", models.ApplicationStatusSubmitted, models.ApplicationStatusShortlisted, true},
-		{"submitted to accepted", models.ApplicationStatusSubmitted, models.ApplicationStatusAccepted, true},
-		{"submitted to rejected", models.ApplicationStatusSubmitted, models.ApplicationStatusRejected, true},
-		{"reviewing to shortlisted", models.ApplicationStatusReviewing, models.ApplicationStatusShortlisted, true},
-		{"reviewing to accepted", models.ApplicationStatusReviewing, models.ApplicationStatusAccepted, true},
-		{"reviewing to rejected", models.ApplicationStatusReviewing, models.ApplicationStatusRejected, true},
-		{"shortlisted to accepted", models.ApplicationStatusShortlisted, models.ApplicationStatusAccepted, true},
-		{"shortlisted to rejected", models.ApplicationStatusShortlisted, models.ApplicationStatusRejected, true},
-		{"same employer status is idempotent", models.ApplicationStatusReviewing, models.ApplicationStatusReviewing, true},
-		{"cannot move shortlisted backwards", models.ApplicationStatusShortlisted, models.ApplicationStatusReviewing, false},
-		{"employer cannot withdraw", models.ApplicationStatusSubmitted, models.ApplicationStatusWithdrawn, false},
-		{"employer cannot reset to submitted", models.ApplicationStatusReviewing, models.ApplicationStatusSubmitted, false},
-		{"accepted is final", models.ApplicationStatusAccepted, models.ApplicationStatusRejected, false},
-		{"accepted cannot be updated idempotently", models.ApplicationStatusAccepted, models.ApplicationStatusAccepted, false},
-		{"rejected is final", models.ApplicationStatusRejected, models.ApplicationStatusReviewing, false},
-		{"rejected cannot be updated idempotently", models.ApplicationStatusRejected, models.ApplicationStatusRejected, false},
-		{"withdrawn is final", models.ApplicationStatusWithdrawn, models.ApplicationStatusReviewing, false},
-		{"unknown status is rejected", models.ApplicationStatusSubmitted, models.InternshipApplicationStatus("unknown"), false},
-		{"empty status is rejected", models.ApplicationStatusSubmitted, "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isValidEmployerStatusTransition(tt.current, tt.next); got != tt.want {
-				t.Fatalf("isValidEmployerStatusTransition(%q, %q) = %v, want %v", tt.current, tt.next, got, tt.want)
+	for _, current := range []models.InternshipApplicationStatus{models.ApplicationStatusSubmitted, models.ApplicationStatusAccepted, models.ApplicationStatusRejected, models.ApplicationStatusWithdrawn} {
+		for _, next := range []models.InternshipApplicationStatus{models.ApplicationStatusSubmitted, models.ApplicationStatusAccepted, models.ApplicationStatusRejected, models.ApplicationStatusWithdrawn, "reviewing", "shortlisted", "unknown"} {
+			want := current == models.ApplicationStatusSubmitted && (next == models.ApplicationStatusAccepted || next == models.ApplicationStatusRejected)
+			if got := isValidEmployerStatusTransition(current, next); got != want {
+				t.Fatalf("transition %s -> %s = %v, want %v", current, next, got, want)
 			}
-		})
+		}
 	}
 }
 
@@ -84,7 +57,6 @@ func TestGetForRecruiterDocumentAndOwnership(t *testing.T) {
 		FileName:  "anita-resume.pdf",
 		MimeType:  "application/pdf",
 		Size:      2048,
-		IsDefault: true,
 	}
 	if err := db.Create(document).Error; err != nil {
 		t.Fatalf("create document: %v", err)
@@ -150,25 +122,25 @@ func TestUpdateStatusDirectDecisionsAndEmployerNote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("accept submitted application: %v", err)
 	}
-	if accepted.Status != models.ApplicationStatusAccepted || accepted.AcceptedAt == nil {
-		t.Fatalf("accepted result = %#v, want accepted timestamp", accepted)
+	if accepted.Status != models.ApplicationStatusAccepted {
+		t.Fatalf("accepted result = %#v, want accepted status", accepted)
 	}
 	if accepted.EmployerNote != "Welcome to the team." {
 		t.Fatalf("accepted note = %q, want trimmed message", accepted.EmployerNote)
 	}
 
 	secondStudent := createServiceTestStudent(t, db, "Nima Sherpa")
-	rejectedApplication := createServiceTestApplication(t, db, internship.ID, secondStudent.ID, models.ApplicationStatusReviewing, "Existing message")
+	rejectedApplication := createServiceTestApplication(t, db, internship.ID, secondStudent.ID, models.ApplicationStatusSubmitted, "Existing message")
 	rejected, err := service.UpdateStatus(ctx, rejectedApplication.ID, employerID, models.ApplicationStatusRejected, nil)
 	if err != nil {
-		t.Fatalf("reject reviewing application: %v", err)
+		t.Fatalf("reject submitted application: %v", err)
 	}
-	if rejected.RejectedAt == nil || rejected.EmployerNote != "Existing message" {
-		t.Fatalf("rejected result = %#v, want timestamp and preserved note", rejected)
+	if rejected.Status != models.ApplicationStatusRejected || rejected.EmployerNote != "Existing message" {
+		t.Fatalf("rejected result = %#v, want rejected status and preserved note", rejected)
 	}
 
 	thirdStudent := createServiceTestStudent(t, db, "Kabita Lama")
-	clearedApplication := createServiceTestApplication(t, db, internship.ID, thirdStudent.ID, models.ApplicationStatusShortlisted, "Clear me")
+	clearedApplication := createServiceTestApplication(t, db, internship.ID, thirdStudent.ID, models.ApplicationStatusSubmitted, "Clear me")
 	emptyNote := "   "
 	cleared, err := service.UpdateStatus(ctx, clearedApplication.ID, employerID, models.ApplicationStatusRejected, &emptyNote)
 	if err != nil {
@@ -201,9 +173,8 @@ func TestListByStudentFiltersAndMapsApplications(t *testing.T) {
 	db := openApplicationServiceTestDB(t)
 	employerID := uuid.New()
 	if err := db.Create(&models.RecruiterProfile{
-		UserID:             employerID,
-		OrganizationName:   "Acme Nepal",
-		VerificationStatus: string(enums.OrganizationVerificationApproved),
+		UserID:           employerID,
+		OrganizationName: "Acme Nepal",
 	}).Error; err != nil {
 		t.Fatalf("create recruiter profile: %v", err)
 	}
@@ -212,8 +183,6 @@ func TestListByStudentFiltersAndMapsApplications(t *testing.T) {
 	service := newApplicationServiceForTest(db, nil)
 	statuses := []models.InternshipApplicationStatus{
 		models.ApplicationStatusSubmitted,
-		models.ApplicationStatusReviewing,
-		models.ApplicationStatusShortlisted,
 		models.ApplicationStatusAccepted,
 		models.ApplicationStatusRejected,
 	}
@@ -223,20 +192,18 @@ func TestListByStudentFiltersAndMapsApplications(t *testing.T) {
 	}
 
 	pending, total, err := service.ListByStudent(context.Background(), student.UserID, StudentApplicationFilter{
-		Status:   StudentApplicationFilterPending,
+		Status:   models.ApplicationStatusSubmitted,
 		Page:     1,
 		PageSize: 10,
 	})
 	if err != nil {
 		t.Fatalf("list pending student applications: %v", err)
 	}
-	if total != 3 || len(pending) != 3 {
-		t.Fatalf("pending total=%d len=%d, want three active applications", total, len(pending))
+	if total != 1 || len(pending) != 1 {
+		t.Fatalf("pending total=%d len=%d, want one submitted application", total, len(pending))
 	}
 	for _, application := range pending {
-		if application.Status != models.ApplicationStatusSubmitted &&
-			application.Status != models.ApplicationStatusReviewing &&
-			application.Status != models.ApplicationStatusShortlisted {
+		if application.Status != models.ApplicationStatusSubmitted {
 			t.Fatalf("pending filter returned terminal status %q", application.Status)
 		}
 		if application.Internship == nil || application.Internship.OrganizationName != "Acme Nepal" {
@@ -248,7 +215,7 @@ func TestListByStudentFiltersAndMapsApplications(t *testing.T) {
 	}
 
 	accepted, acceptedTotal, err := service.ListByStudent(context.Background(), student.UserID, StudentApplicationFilter{
-		Status:   StudentApplicationFilterAccepted,
+		Status:   models.ApplicationStatusAccepted,
 		Page:     1,
 		PageSize: 10,
 	})
@@ -306,7 +273,11 @@ func TestFindByStudentAndInternship(t *testing.T) {
 func TestCreateApplicationRejectsDuplicate(t *testing.T) {
 	db := openApplicationServiceTestDB(t)
 	student := createServiceTestStudent(t, db, "Maya Gurung")
-	internship := createServiceTestInternship(t, db, uuid.New(), "Backend Intern")
+	employerID := uuid.New()
+	if err := db.Create(&models.RecruiterProfile{UserID: employerID, OrganizationName: "Employer"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	internship := createServiceTestInternship(t, db, employerID, "Backend Intern")
 	createServiceTestApplication(
 		t,
 		db,
@@ -317,7 +288,7 @@ func TestCreateApplicationRejectsDuplicate(t *testing.T) {
 	)
 	service := newApplicationServiceForTest(db, nil)
 
-	err := service.CreateApplication(context.Background(), &models.InternshipApplication{
+	err := service.CreateApplication(context.Background(), student.UserID, &models.InternshipApplication{
 		InternshipID: internship.ID,
 		StudentID:    student.UserID,
 	})
@@ -352,6 +323,10 @@ func newApplicationServiceForTest(db *gorm.DB, signer documentURLSigner) *Intern
 		repositories.NewStudentRepository(db),
 		signer,
 		"student-documents",
+		&RecruiterProfileService{},
+		repositories.NewUserRepository(db),
+		nil,
+		nil,
 	)
 }
 
@@ -364,7 +339,6 @@ func createServiceTestInternship(t *testing.T, db *gorm.DB, employerID uuid.UUID
 		WorkMode:       "remote",
 		InternshipType: "paid",
 		Status:         enums.InternshipStatusPublished,
-		IsActive:       true,
 	}
 	if err := db.Omit("Issuer").Create(internship).Error; err != nil {
 		t.Fatalf("create internship: %v", err)
@@ -415,8 +389,6 @@ func TestIsWithdrawableApplicationStatus(t *testing.T) {
 		want   bool
 	}{
 		{"submitted application", models.ApplicationStatusSubmitted, true},
-		{"reviewing application", models.ApplicationStatusReviewing, true},
-		{"shortlisted application", models.ApplicationStatusShortlisted, true},
 		{"accepted application is final", models.ApplicationStatusAccepted, false},
 		{"rejected application is final", models.ApplicationStatusRejected, false},
 		{"withdrawn application is already final", models.ApplicationStatusWithdrawn, false},
@@ -427,6 +399,70 @@ func TestIsWithdrawableApplicationStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := isWithdrawableApplicationStatus(tt.status); got != tt.want {
 				t.Fatalf("isWithdrawableApplicationStatus(%q) = %v, want %v", tt.status, got, tt.want)
+			}
+		})
+	}
+}
+
+type applicationStatusSenderFunc func(context.Context, string, string, models.InternshipApplicationStatus, string) error
+
+func (f applicationStatusSenderFunc) SendApplicationStatus(ctx context.Context, to, title string, status models.InternshipApplicationStatus, note string) error {
+	return f(ctx, to, title, status, note)
+}
+
+func TestUpdateStatusNotifiesStudentAfterSaving(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		status       models.InternshipApplicationStatus
+		failDelivery bool
+	}{
+		{"acceptance", models.ApplicationStatusAccepted, false},
+		{"rejection", models.ApplicationStatusRejected, false},
+		{"delivery failure preserves decision", models.ApplicationStatusAccepted, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := openApplicationServiceTestDB(t)
+			if err := db.AutoMigrate(&models.User{}); err != nil {
+				t.Fatal(err)
+			}
+			employerID := uuid.New()
+			internship := createServiceTestInternship(t, db, employerID, "Engineering Intern")
+			student := createServiceTestStudent(t, db, "Student")
+			if err := db.Create(&models.User{ID: student.UserID, Email: "student@example.com", PasswordHash: "test", Role: models.RoleStudent}).Error; err != nil {
+				t.Fatal(err)
+			}
+			application := createServiceTestApplication(t, db, internship.ID, student.ID, models.ApplicationStatusSubmitted, "")
+			service := newApplicationServiceForTest(db, nil)
+			calls := 0
+			service.sender = applicationStatusSenderFunc(func(ctx context.Context, to, title string, status models.InternshipApplicationStatus, note string) error {
+				calls++
+				if to != "student@example.com" || title != internship.Title || status != tc.status || note != "Recruiter message" {
+					t.Fatalf("unexpected email: %q %q %q %q", to, title, status, note)
+				}
+				saved, err := service.repo.GetByID(ctx, application.ID)
+				if err != nil || saved.Status != status || saved.EmployerNote != note {
+					t.Fatalf("email sent before decision persisted: %#v, %v", saved, err)
+				}
+				if tc.failDelivery {
+					return errors.New("mail unavailable")
+				}
+				return nil
+			})
+			note := "  Recruiter message  "
+			ctx := context.Background()
+			if _, err := service.UpdateStatus(ctx, application.ID, uuid.New(), tc.status, &note); !errors.Is(err, ErrUnauthorizedAccess) || calls != 0 {
+				t.Fatalf("unauthorized decision: error=%v, email calls=%d", err, calls)
+			}
+			updated, err := service.UpdateStatus(ctx, application.ID, employerID, tc.status, &note)
+			if err != nil || updated.Status != tc.status || calls != 1 {
+				t.Fatalf("decision: result=%#v, error=%v, email calls=%d", updated, err, calls)
+			}
+			if _, err := service.UpdateStatus(ctx, application.ID, employerID, tc.status, &note); !errors.Is(err, ErrInvalidStatusTransition) || calls != 1 {
+				t.Fatalf("repeated decision: error=%v, email calls=%d", err, calls)
+			}
+			own, err := service.FindByStudentAndInternship(ctx, student.UserID, internship.ID)
+			if err != nil || own.Status != tc.status || own.EmployerNote != "Recruiter message" {
+				t.Fatalf("student decision: result=%#v, error=%v", own, err)
 			}
 		})
 	}

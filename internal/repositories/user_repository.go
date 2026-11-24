@@ -1,8 +1,10 @@
 package repositories
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -23,36 +25,21 @@ func (r *UserRepository) Create(user *models.User) error {
 	return r.DB.Create(user).Error
 }
 
-func (r *UserRepository) List(page, pageSize int) ([]models.User, int64, error) {
-	var users []models.User
-	var total int64
-
-	if err := r.DB.Model(&models.User{}).Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	offset, limit := getPagination(page, pageSize)
-	err := r.DB.Model(&models.User{}).
-		Select("id, email, full_name, role, created_at").
-		Order("created_at DESC").
-		Offset(offset).
-		Limit(limit).
-		Find(&users).Error
-
-	return users, total, err
-}
-
 func (r *UserRepository) GetByEmail(email string) (*models.User, error) {
 	var u models.User
-	if err := r.DB.Where("email = ?", email).First(&u).Error; err != nil {
+	if err := r.DB.Where("LOWER(TRIM(email)) = ?", strings.ToLower(strings.TrimSpace(email))).First(&u).Error; err != nil {
 		return nil, err
 	}
 	return &u, nil
 }
 
 func (r *UserRepository) GetByID(id uuid.UUID) (*models.User, error) {
+	return r.GetByIDContext(context.Background(), id)
+}
+
+func (r *UserRepository) GetByIDContext(ctx context.Context, id uuid.UUID) (*models.User, error) {
 	var u models.User
-	if err := r.DB.First(&u, "id = ?", id).Error; err != nil {
+	if err := r.DB.WithContext(ctx).First(&u, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
 	return &u, nil

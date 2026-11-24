@@ -70,8 +70,6 @@ type Internship struct {
 	// Status
 	Status enums.InternshipStatus `gorm:"size:30;not null;index" json:"status"`
 
-	IsActive bool `json:"is_active"`
-
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

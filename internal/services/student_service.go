@@ -9,242 +9,209 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
-	"gorm.io/gorm"
-
 	"github.com/prasanna/student-job-portal/backend/internal/config"
 	"github.com/prasanna/student-job-portal/backend/internal/logger"
 	"github.com/prasanna/student-job-portal/backend/internal/models"
 	"github.com/prasanna/student-job-portal/backend/internal/repositories"
+	"gorm.io/gorm"
 )
 
 var (
-	ErrInvalidStudentData      = errors.New("invalid student data")
-	ErrStudentProfileNotFound  = errors.New("student profile not found")
-	ErrStudentDocumentNotFound = errors.New("student document not found")
+	ErrInvalidStudentData     = errors.New("invalid student data")
+	ErrStudentProfileNotFound = errors.New("student profile not found")
 )
 
-// StudentService provides student-related operations that use repositories and MinIO.
+const maxResumeSize = 10 << 20
+
 type StudentService struct {
 	repo        *repositories.StudentRepository
 	minioClient *minio.Client
 	cfg         *config.Config
-	l           *logger.Logger
+	log         *logger.Logger
 }
 
-// NewStudentService constructs a new StudentService.
-func NewStudentService(
-	repo *repositories.StudentRepository,
-	minioClient *minio.Client,
-	cfg *config.Config,
-	l *logger.Logger,
-) *StudentService {
-	return &StudentService{repo: repo, minioClient: minioClient, cfg: cfg, l: l}
-}
-
-// CalculateProfileCompletion returns a simple profile completion percentage based
-// on the fraction of non-empty key fields in the profile.
-func (s *StudentService) CalculateProfileCompletion(profile *models.StudentProfile) int {
-	if profile == nil {
-		return 0
-	}
-
-	// Choose a set of key fields to consider for completion.
-	fields := []string{
-		profile.FullName,
-		profile.Phone,
-		profile.Location,
-		profile.Bio,
-		profile.CollegeName,
-		profile.Degree,
-		profile.FacultyOrMajor,
-		profile.CurrentSemester,
-		profile.PreferredJobCategories,
-		profile.PreferredLocations,
-		profile.PreferredWorkMode,
-		profile.Availability,
-		profile.ExpectedSalary,
-		profile.LinkedinURL,
-		profile.GithubURL,
-		profile.PortfolioURL,
-		profile.ProfileImageKey,
-	}
-
-	total := len(fields) + 1 // include GraduationYear as a numeric field
-	present := 0
-	for _, f := range fields {
-		if f != "" {
-			present++
-		}
-	}
-	if profile.GraduationYear > 0 {
-		present++
-	}
-
-	if total == 0 {
-		return 0
-	}
-
-	percent := int(float64(present) / float64(total) * 100)
-	return percent
+func NewStudentService(repo *repositories.StudentRepository, storage *minio.Client, cfg *config.Config, log *logger.Logger) *StudentService {
+	return &StudentService{repo: repo, minioClient: storage, cfg: cfg, log: log}
 }
 
 func (s *StudentService) GetProfile(userID uuid.UUID) (*models.StudentProfile, error) {
-	if userID == uuid.Nil {
-		return nil, fmt.Errorf("%w: invalid user id", ErrInvalidStudentData)
-	}
 	profile, err := s.repo.GetByUserID(userID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, ErrStudentProfileNotFound
 	}
-	return profile, err
+	if err != nil {
+		return nil, err
+	}
+	return profile, s.setProfilePictureURL(context.Background(), profile)
 }
 
-func (s *StudentService) GetApplicationStats(
-	ctx context.Context,
-	profileID uuid.UUID,
-) (*repositories.StudentApplicationStats, error) {
-	if profileID == uuid.Nil {
-		return nil, fmt.Errorf("%w: invalid student profile id", ErrInvalidStudentData)
+func (s *StudentService) setProfilePictureURL(ctx context.Context, profile *models.StudentProfile) error {
+	if profile.ProfilePictureKey == "" {
+		return nil
 	}
+	if s.minioClient == nil {
+		return errors.New("profile picture storage unavailable")
+	}
+	url, err := s.minioClient.PresignedGetObject(ctx, s.cfg.MinIO.ProfileBucket, profile.ProfilePictureKey, time.Hour, nil)
+	if err != nil {
+		return err
+	}
+	profile.ProfilePicture = url.String()
+	return nil
+}
 
+func (s *StudentService) GetApplicationStats(ctx context.Context, profileID uuid.UUID) (*repositories.StudentApplicationStats, error) {
 	return s.repo.GetApplicationStats(ctx, profileID)
 }
 
-func (s *StudentService) CreateOrUpdateProfile(profile *models.StudentProfile) error {
+func (s *StudentService) CreateOrUpdateProfile(ctx context.Context, profile *models.StudentProfile) error {
 	if profile == nil || profile.UserID == uuid.Nil {
-		return fmt.Errorf("%w: profile and user id are required", ErrInvalidStudentData)
+		return ErrInvalidStudentData
 	}
-	return s.repo.CreateOrUpdateProfile(profile)
+	profile.FullName = strings.TrimSpace(profile.FullName)
+	if profile.FullName == "" || len(profile.FullName) > 255 || len(profile.Phone) > 50 || len(profile.Location) > 255 || len(profile.Bio) > 5000 || len(profile.CollegeName) > 255 || len(profile.Degree) > 255 || len(profile.FacultyOrMajor) > 255 || len(profile.CurrentSemester) > 64 || profile.GraduationYear < 0 || profile.GraduationYear > 9999 {
+		return fmt.Errorf("%w: name is required and profile fields must fit their limits", ErrInvalidStudentData)
+	}
+	for _, link := range []string{profile.LinkedinURL, profile.GithubURL, profile.PortfolioURL} {
+		if len(link) > 255 || (link != "" && !strings.HasPrefix(link, "https://") && !strings.HasPrefix(link, "http://")) {
+			return fmt.Errorf("%w: links must use http or https and be at most 255 characters", ErrInvalidStudentData)
+		}
+	}
+	profile.ID, profile.CreatedAt, profile.DeletedAt = uuid.Nil, time.Time{}, gorm.DeletedAt{}
+	profile.ProfilePictureKey, profile.ProfilePicture = "", ""
+	if err := s.repo.CreateOrUpdateProfile(ctx, profile); err != nil {
+		return err
+	}
+	return s.setProfilePictureURL(ctx, profile)
 }
 
-// UploadDocument uploads the provided multipart file header to MinIO under the configured
-// student documents bucket. Returns the object key, size in bytes, detected mime type and error.
-func (s *StudentService) UploadDocument(userID, profileID uuid.UUID, fileHeader *multipart.FileHeader) (string, int64, string, error) {
-	if userID == uuid.Nil || profileID == uuid.Nil {
-		return "", 0, "", fmt.Errorf("%w: user id and profile id are required", ErrInvalidStudentData)
-	}
-	if fileHeader == nil {
-		return "", 0, "", fmt.Errorf("%w: file is required", ErrInvalidStudentData)
-	}
-	if fileHeader.Size <= 0 {
-		return "", 0, "", fmt.Errorf("%w: uploaded file is empty", ErrInvalidStudentData)
-	}
-
-	f, err := fileHeader.Open()
-	if err != nil {
-		return "", 0, "", fmt.Errorf("opening uploaded file: %w", err)
-	}
-	defer func() { _ = f.Close() }()
-
-	// Read up to 512 bytes for content type detection
-	buf := make([]byte, 512)
-	n, _ := f.Read(buf)
-	contentType := fileHeader.Header.Get("Content-Type")
-	if contentType == "" {
-		contentType = http.DetectContentType(buf[:n])
-	}
-
-	var reader io.Reader
-	// Try to rewind the file if it supports seeking
-	if seeker, ok := f.(io.Seeker); ok {
-		_, _ = seeker.Seek(0, io.SeekStart)
-		reader = f
-	} else {
-		// Non-seekable: prepend the portion we already read
-		reader = io.MultiReader(bytes.NewReader(buf[:n]), f)
-	}
-
-	// Build object key: students/{userID}/{profileID}/{uuid}{ext}
-	ext := filepath.Ext(fileHeader.Filename)
-	objectKey := fmt.Sprintf("students/%s/%s/%s%s", userID.String(), profileID.String(), uuid.New().String(), ext)
-
-	ctx := context.Background()
-	bucket := s.cfg.MinIO.StudentDocBucket
-	putOpts := minio.PutObjectOptions{ContentType: contentType}
-
-	info, err := s.minioClient.PutObject(ctx, bucket, objectKey, reader, fileHeader.Size, putOpts)
-	if err != nil {
-		s.l.Error("failed to upload object to minio", err)
-		return "", 0, "", fmt.Errorf("put object: %w", err)
-	}
-
-	return objectKey, info.Size, contentType, nil
-}
-
-func (s *StudentService) AddDocument(document *models.StudentDocument) error {
-	if document == nil || document.UserID == uuid.Nil || document.ProfileID == uuid.Nil || document.ObjectKey == "" {
-		return fmt.Errorf("%w: complete document metadata is required", ErrInvalidStudentData)
-	}
-	return s.repo.AddDocument(document)
-}
-
-func (s *StudentService) ListDocuments(userID uuid.UUID) ([]models.StudentDocument, error) {
+func (s *StudentService) UploadProfilePicture(ctx context.Context, userID uuid.UUID, file *multipart.FileHeader) (*models.StudentProfile, error) {
 	profile, err := s.GetProfile(userID)
 	if err != nil {
 		return nil, err
 	}
-	return s.repo.ListDocuments(profile.ID)
+	data, contentType, extension, err := readProfilePicture(file)
+	if err != nil {
+		return nil, err
+	}
+	if s.minioClient == nil {
+		return nil, errors.New("profile picture storage unavailable")
+	}
+	key := fmt.Sprintf("student-pictures/%s/%s%s", userID, uuid.New(), extension)
+	bucket := s.cfg.MinIO.ProfileBucket
+	if _, err := s.minioClient.PutObject(ctx, bucket, key, bytes.NewReader(data), int64(len(data)), minio.PutObjectOptions{ContentType: contentType}); err != nil {
+		return nil, err
+	}
+	oldKey, err := s.repo.UpdateProfilePicture(ctx, userID, key)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err != nil {
+		if cleanupErr := s.minioClient.RemoveObject(cleanupCtx, bucket, key, minio.RemoveObjectOptions{}); cleanupErr != nil {
+			s.log.Error("clean up failed profile picture upload: %v", cleanupErr)
+		}
+		return nil, err
+	}
+	if oldKey != "" {
+		if err := s.minioClient.RemoveObject(cleanupCtx, bucket, oldKey, minio.RemoveObjectOptions{}); err != nil {
+			s.log.Error("clean up replaced profile picture: %v", err)
+		}
+	}
+	profile.ProfilePictureKey = key
+	return profile, s.setProfilePictureURL(ctx, profile)
 }
 
-func (s *StudentService) SetDefaultDocument(userID, documentID uuid.UUID) error {
-	if documentID == uuid.Nil {
-		return fmt.Errorf("%w: invalid document id", ErrInvalidStudentData)
+func (s *StudentService) GetResume(ctx context.Context, userID uuid.UUID) (*models.StudentDocument, error) {
+	profile, err := s.GetProfile(userID)
+	if err != nil {
+		return nil, err
 	}
+	resume, err := s.repo.GetResume(ctx, profile.ID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if s.minioClient == nil {
+		return nil, errors.New("CV storage unavailable")
+	}
+	link, err := s.minioClient.PresignedGetObject(ctx, s.cfg.MinIO.StudentDocBucket, resume.ObjectKey, 5*time.Minute, nil)
+	if err != nil {
+		return nil, err
+	}
+	resume.URL = link.String()
+	return resume, nil
+}
+
+func (s *StudentService) UploadResume(ctx context.Context, userID uuid.UUID, file *multipart.FileHeader) (*models.StudentDocument, error) {
+	profile, err := s.GetProfile(userID)
+	if err != nil {
+		return nil, err
+	}
+	if file == nil || file.Size <= 0 || file.Size > maxResumeSize {
+		return nil, fmt.Errorf("%w: upload a PDF CV of at most 10 MiB", ErrInvalidStudentData)
+	}
+	reader, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	data, err := io.ReadAll(io.LimitReader(reader, maxResumeSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxResumeSize || http.DetectContentType(data) != "application/pdf" {
+		return nil, fmt.Errorf("%w: upload a PDF CV of at most 10 MiB", ErrInvalidStudentData)
+	}
+	if s.minioClient == nil {
+		return nil, errors.New("CV storage unavailable")
+	}
+	resume := &models.StudentDocument{UserID: userID, ProfileID: profile.ID, FileName: filepath.Base(file.Filename), MimeType: "application/pdf", Size: int64(len(data)), ObjectKey: fmt.Sprintf("students/%s/%s.pdf", userID, uuid.New())}
+	bucket := s.cfg.MinIO.StudentDocBucket
+	if _, err := s.minioClient.PutObject(ctx, bucket, resume.ObjectKey, bytes.NewReader(data), resume.Size, minio.PutObjectOptions{ContentType: "application/pdf"}); err != nil {
+		return nil, err
+	}
+	oldKey, err := s.repo.SaveResume(ctx, resume)
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	if err != nil {
+		if cleanupErr := s.minioClient.RemoveObject(cleanupCtx, bucket, resume.ObjectKey, minio.RemoveObjectOptions{}); cleanupErr != nil {
+			s.log.Error("clean up failed CV upload: %v", cleanupErr)
+		}
+		return nil, err
+	}
+	if oldKey != "" {
+		if err := s.minioClient.RemoveObject(cleanupCtx, bucket, oldKey, minio.RemoveObjectOptions{}); err != nil {
+			s.log.Error("clean up replaced CV: %v", err)
+		}
+	}
+	return resume, nil
+}
+
+func (s *StudentService) DeleteResume(ctx context.Context, userID uuid.UUID) error {
 	profile, err := s.GetProfile(userID)
 	if err != nil {
 		return err
 	}
-	document, err := s.getDocument(documentID)
+	if s.minioClient == nil {
+		return errors.New("CV storage unavailable")
+	}
+	documents, err := s.repo.DeleteResume(ctx, profile.ID, userID)
 	if err != nil {
 		return err
 	}
-	if document.ProfileID != profile.ID {
-		return ErrStudentDocumentNotFound
-	}
-	return s.repo.SetDefaultDocument(profile.ID, documentID)
-}
-
-func (s *StudentService) DeleteDocumentByUserID(userID, documentID uuid.UUID) error {
-	if userID == uuid.Nil || documentID == uuid.Nil {
-		return fmt.Errorf("%w: user id and document id are required", ErrInvalidStudentData)
-	}
-	document, err := s.getDocument(documentID)
-	if err != nil {
-		return err
-	}
-	if document.UserID != userID {
-		return ErrStudentDocumentNotFound
-	}
-	if err := s.DeleteDocument(document.ObjectKey); err != nil {
-		// Preserve the prior behavior: a storage cleanup failure must not leave
-		// inaccessible document metadata behind.
-		s.l.Error("failed to delete student document from storage: %v", err)
-	}
-	return s.repo.DeleteDocumentByID(document.ID)
-}
-
-func (s *StudentService) getDocument(id uuid.UUID) (*models.StudentDocument, error) {
-	document, err := s.repo.GetDocumentByID(id)
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, ErrStudentDocumentNotFound
-	}
-	return document, err
-}
-
-// DeleteDocument removes the object identified by objectKey from the student documents bucket.
-func (s *StudentService) DeleteDocument(objectKey string) error {
-	if objectKey == "" {
-		return fmt.Errorf("%w: object key is required", ErrInvalidStudentData)
-	}
-	ctx := context.Background()
-	bucket := s.cfg.MinIO.StudentDocBucket
-	err := s.minioClient.RemoveObject(ctx, bucket, objectKey, minio.RemoveObjectOptions{})
-	if err != nil {
-		s.l.Error("failed to remove object from minio", err)
-		return err
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	// shortcut: storage cleanup is best effort, add retries if storage failures persist.
+	for _, document := range documents {
+		if err := s.minioClient.RemoveObject(cleanupCtx, s.cfg.MinIO.StudentDocBucket, document.ObjectKey, minio.RemoveObjectOptions{}); err != nil {
+			s.log.Error("clean up deleted CV: %v", err)
+		}
 	}
 	return nil
 }

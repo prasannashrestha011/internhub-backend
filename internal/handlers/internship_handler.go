@@ -37,7 +37,7 @@ func (h *InternshipHandler) GetInternship(c *gin.Context) {
 		responses.Error(c, http.StatusBadRequest, "invalid internship ID format")
 		return
 	}
-	internship, err := h.service.GetInternship(c.Request.Context(), id)
+	internship, err := h.service.GetInternshipDetail(c.Request.Context(), id)
 	if errors.Is(err, services.ErrInternshipNotFound) {
 		responses.Error(c, http.StatusNotFound, "internship not found")
 		return
@@ -169,11 +169,6 @@ func parseInternshipSearchFilter(c *gin.Context) repositories.InternshipSearchFi
 	f := repositories.InternshipSearchFilter{Query: c.Query("q"), Location: c.Query("location"), WorkMode: c.Query("work_mode"), InternshipType: c.Query("internship_type"), Status: enums.InternshipStatus(c.Query("status")), Page: page, PageSize: pageSize}
 	if id, err := uuid.Parse(c.Query("employer_id")); err == nil {
 		f.EmployerID = &id
-	}
-	if value := c.Query("is_active"); value != "" {
-		if b, err := strconv.ParseBool(value); err == nil {
-			f.IsActive = &b
-		}
 	}
 	if value := c.Query("min_stipend"); value != "" {
 		if amount, err := strconv.ParseFloat(value, 64); err == nil {

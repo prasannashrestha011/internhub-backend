@@ -1,5 +1,8 @@
 # Development database seeding
 
+API startup does not create demo data. Run the command below only when you want
+to populate the database with the development dataset.
+
 From the `backend` directory, run:
 
 ```bash
@@ -16,19 +19,19 @@ password for every seeded account.
 
 | Role | Email |
 | --- | --- |
-| Admin | `seed.admin@jobportal.test` |
 | Student | `seed.student@jobportal.test` |
 | Student | `seed.student2@jobportal.test` |
-| Approved employer | `seed.employer@jobportal.test` |
-| Pending employer | `seed.employer.pending@jobportal.test` |
-| Rejected employer | `seed.employer.rejected@jobportal.test` |
+| Employer | `seed.employer@jobportal.test` |
+| Employer | `seed.employer.pending@jobportal.test` |
+| Employer | `seed.employer.rejected@jobportal.test` |
 
 ## Dataset coverage
 
-- Two 100% complete student profiles with education, skills, projects, and certifications.
-- Three complete employer profiles with approved, pending, and rejected organization verifications.
-- Six internships: three published, two private, and one closed.
-- Six applications: submitted, reviewing, shortlisted, accepted, rejected, and withdrawn.
+- Two student profiles with college and degree details.
+- Three employer profiles, ready to publish without approval.
+- Six internships: three published, two private drafts, and one closed.
+- Six applications covering submitted, accepted, rejected, and withdrawn states.
 
-The seed intentionally omits uploaded document and logo records because their
-database metadata would point to MinIO objects that do not exist.
+The older `pending` and `rejected` email names are retained for existing demo logins;
+they do not restrict employer access. All seeded accounts have confirmed email addresses. The seed omits uploaded
+CVs and logos because their metadata would point to MinIO objects that do not exist.
