@@ -49,6 +49,29 @@ func (h *InternshipHandler) GetInternship(c *gin.Context) {
 	responses.Success(c, http.StatusOK, "internship", internship)
 }
 
+func (h *InternshipHandler) GetMyInternship(c *gin.Context) {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		responses.Error(c, http.StatusBadRequest, "invalid internship ID format")
+		return
+	}
+	userID, ok := authenticatedUserID(c)
+	if !ok {
+		responses.Error(c, http.StatusUnauthorized, "invalid user context")
+		return
+	}
+	internship, err := h.service.GetInternship(c.Request.Context(), id)
+	if err != nil {
+		writeInternshipError(c, err, "failed to fetch internship")
+		return
+	}
+	if internship.IssuedBy != userID {
+		responses.Error(c, http.StatusNotFound, "internship not found")
+		return
+	}
+	responses.Success(c, http.StatusOK, "internship", internship)
+}
+
 func (h *InternshipHandler) CreateInternship(c *gin.Context) {
 	var internship models.Internship
 	if err := c.ShouldBindJSON(&internship); err != nil {

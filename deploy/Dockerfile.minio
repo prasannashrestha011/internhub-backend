@@ -1,0 +1,8 @@
+# MinIO's Docker Hub image is unavailable. Pin the multi-architecture release build.
+# shortcut: upstream MinIO is archived, migrate to maintained storage for ongoing security updates.
+FROM ghcr.io/coollabsio/minio:RELEASE.2025-10-15T17-29-55Z@sha256:69b55a1c1c5dc285ce04db96689f5b2102317fc77a50680a1874ca6efd1c87f9 AS minio
+FROM alpine:3.24
+RUN mkdir -p /minio_data
+COPY --from=minio /usr/bin/minio /usr/bin/minio
+EXPOSE 9000
+ENTRYPOINT ["/usr/bin/minio"]

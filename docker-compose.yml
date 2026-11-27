@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       POSTGRES_DB: ${DB_NAME:-student_job_portal}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -19,19 +19,21 @@ services:
       - student-job-portal
 
   minio:
-    image: minio/minio:latest
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.minio
     container_name: student-job-portal-minio
     environment:
       MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-minioadmin}
     ports:
-      - "9002:9000"
-      - "9003:9001"
+      - "127.0.0.1:9002:9000"
+      - "127.0.0.1:9003:9001"
     volumes:
       - minio_data:/minio_data
     command: server /minio_data --console-address ":9001"
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:9000/minio/health/live" ]
+      test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://localhost:9000/minio/health/ready" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -51,6 +53,9 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       APP_PORT: ${APP_PORT:-8080}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:3000}
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-}
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
       DB_HOST: postgres
       DB_PORT: ${DB_PORT:-5432}
       DB_NAME: ${DB_NAME:-student_job_portal}
@@ -70,12 +75,14 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-minioadmin}
       MINIO_USE_SSL: ${MINIO_USE_SSL:-false}
+      MINIO_PUBLIC_URL: ${MINIO_PUBLIC_URL:-http://localhost:9002}
+      MINIO_REGION: ${MINIO_REGION:-us-east-1}
       MINIO_PROFILE_BUCKET: ${MINIO_PROFILE_BUCKET:-profile-images}
       MINIO_STUDENT_DOCUMENT_BUCKET: ${MINIO_STUDENT_DOCUMENT_BUCKET:-student-documents}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     healthcheck:
-      test: [ "CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/health" ]
+      test: [ "CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://localhost:8080/ready" ]
       interval: 10s
       timeout: 5s
       retries: 5

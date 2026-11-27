@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Student Job Portal backup
+
+[Timer]
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=true
+Unit=portal-backup.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,136 @@
+name: student-job-portal-production
+
+# Images are built and pushed by .github/workflows/deploy.yml. The VPS only needs
+# this file and .env.production. Set IMAGE_TAG=sha-<commit> in .env.production to
+# pin or roll back to a specific build.
+
+x-defaults: &defaults
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+  networks:
+    - portal
+
+services:
+  postgres:
+    <<: *defaults
+    image: postgres:16-alpine
+    mem_limit: 3g
+    shm_size: 256m
+    environment:
+      POSTGRES_USER: ${DB_USER:?Set DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME:?Set DB_NAME}
+    command: ["postgres", "-c", "max_connections=30", "-c", "shared_buffers=512MB", "-c", "work_mem=4MB", "-c", "statement_timeout=30000"]
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    stop_grace_period: 60s
+
+  minio:
+    <<: *defaults
+    image: ${IMAGE_PREFIX:-ghcr.io/prasannashrestha011/internship-portal-api}/minio:${IMAGE_TAG:-latest}
+    mem_limit: 2g
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+      MINIO_REGION_NAME: us-east-1
+      GOMEMLIMIT: 1536MiB
+      MINIO_BROWSER: "off"
+    command: ["server", "/minio_data", "--address", ":9000"]
+    volumes:
+      - minio_data:/minio_data
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    stop_grace_period: 40s
+
+  api:
+    <<: *defaults
+    image: ${IMAGE_PREFIX:-ghcr.io/prasannashrestha011/internship-portal-api}/api:${IMAGE_TAG:-latest}
+    mem_limit: 1g
+    environment:
+      APP_ENV: production
+      APP_PORT: "8080"
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?Set the HTTPS frontend origin}
+      TRUSTED_PROXIES: "172.30.0.2"
+      COOKIE_DOMAIN: ${COOKIE_DOMAIN:-}
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: ${DB_NAME:?Set DB_NAME}
+      DB_USER: ${DB_USER:?Set DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD}
+      DB_SSL_MODE: disable
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Set JWT_ACCESS_SECRET}
+      JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY:-15m}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY:-168h}
+      SMTP_HOST: ${SMTP_HOST:?Set SMTP_HOST}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:?Set SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:?Set SMTP_PASSWORD}
+      SMTP_FROM: ${SMTP_FROM:?Set SMTP_FROM}
+      EMAIL_OTP_SECRET: ${EMAIL_OTP_SECRET:?Set EMAIL_OTP_SECRET}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY}
+      MINIO_USE_SSL: "false"
+      MINIO_REGION: us-east-1
+      MINIO_PUBLIC_URL: https://${STORAGE_DOMAIN:?Set STORAGE_DOMAIN}
+      MINIO_PROFILE_BUCKET: profile-images
+      MINIO_STUDENT_DOCUMENT_BUCKET: student-documents
+      GOMEMLIMIT: 768MiB
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-T", "3", "-O", "/dev/null", "http://localhost:8080/ready"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    stop_grace_period: 40s
+
+  proxy:
+    <<: *defaults
+    image: ${IMAGE_PREFIX:-ghcr.io/prasannashrestha011/internship-portal-api}/caddy:${IMAGE_TAG:-latest}
+    mem_limit: 256m
+    environment:
+      API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN}
+      STORAGE_DOMAIN: ${STORAGE_DOMAIN:?Set STORAGE_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      portal:
+        ipv4_address: 172.30.0.2
+    depends_on:
+      - api
+    stop_grace_period: 40s
+
+volumes:
+  postgres_data:
+  minio_data:
+  caddy_data:
+  caddy_config:
+
+networks:
+  portal:
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+          ip_range: 172.30.0.128/25

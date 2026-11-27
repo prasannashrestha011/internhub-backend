@@ -2,6 +2,7 @@
 package routes
 
 import (
+	"context"
 	"net/http"
 	"time"
 
@@ -20,7 +21,7 @@ import (
 )
 
 // Register creates application dependencies and registers all API routes.
-func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.Logger, minioClient *minio.Client) {
+func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.Logger, minioClient, urlSigner *minio.Client) {
 	userRepo := repositories.NewUserRepository(db)
 	studentRepo := repositories.NewStudentRepository(db)
 	recruiterProfileRepo := repositories.NewRecruiterProfileRepository(db)
@@ -28,9 +29,9 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	appRepo := repositories.NewInternshipApplicationRepository(db)
 
 	authSvc := services.NewAuthService(userRepo, cfg, log)
-	studentSvc := services.NewStudentService(studentRepo, minioClient, cfg, log)
-	recruiterProfileSvc := services.NewRecruiterProfileService(recruiterProfileRepo, minioClient, cfg.MinIO.ProfileBucket)
-	appSvc := services.NewInternshipApplicationService(appRepo, internshipRepo, studentRepo, minioClient, cfg.MinIO.StudentDocBucket, recruiterProfileSvc, userRepo, services.SMTPVerificationSender{Config: cfg.Email}, log)
+	studentSvc := services.NewStudentService(studentRepo, minioClient, urlSigner, cfg, log)
+	recruiterProfileSvc := services.NewRecruiterProfileService(recruiterProfileRepo, minioClient, urlSigner, cfg.MinIO.ProfileBucket)
+	appSvc := services.NewInternshipApplicationService(appRepo, internshipRepo, studentRepo, urlSigner, cfg.MinIO.StudentDocBucket, recruiterProfileSvc, userRepo, services.SMTPVerificationSender{Config: cfg.Email}, log)
 	internshipSvc := services.NewInternshipService(internshipRepo, recruiterProfileRepo, recruiterProfileSvc)
 
 	authHandler := handlers.NewAuthHandler(authSvc, log)
@@ -40,9 +41,11 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 	appHandler := handlers.NewApplicationHandler(appSvc, log)
 
 	router.GET("/health", healthCheck)
+	router.GET("/ready", readinessCheck(db, minioClient, cfg))
 
 	v1 := router.Group("/api/v1")
 	v1.GET("/health", healthCheck)
+	v1.GET("/ready", readinessCheck(db, minioClient, cfg))
 
 	authGroup := v1.Group("/auth")
 	authGroup.Use(middleware.RateLimitMiddleware())
@@ -96,11 +99,32 @@ func Register(router *gin.Engine, db *gorm.DB, cfg *config.Config, log *logger.L
 
 	recruiterInternships := recruiterGroup.Group("/me/internships")
 	recruiterInternships.GET("", internshipHandler.ListMyInternships)
+	recruiterInternships.GET("/:id", internshipHandler.GetMyInternship)
 	recruiterInternships.POST("", internshipHandler.CreateInternship)
 	recruiterInternships.PUT("/:id", internshipHandler.UpdateInternship)
 	recruiterInternships.DELETE("/:id", internshipHandler.DeleteInternship)
 	recruiterInternships.GET("/:id/applications", appHandler.ListForInternship)
 
+}
+
+func readinessCheck(db *gorm.DB, client *minio.Client, cfg *config.Config) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+		defer cancel()
+		sqlDB, err := db.DB()
+		if err != nil || sqlDB.PingContext(ctx) != nil || client == nil {
+			responses.Error(c, http.StatusServiceUnavailable, "Dependencies unavailable")
+			return
+		}
+		for _, bucket := range []string{cfg.MinIO.ProfileBucket, cfg.MinIO.StudentDocBucket} {
+			exists, err := client.BucketExists(ctx, bucket)
+			if err != nil || !exists {
+				responses.Error(c, http.StatusServiceUnavailable, "Dependencies unavailable")
+				return
+			}
+		}
+		responses.Success(c, http.StatusOK, "Ready", gin.H{"status": "ok"})
+	}
 }
 
 func healthCheck(c *gin.Context) {

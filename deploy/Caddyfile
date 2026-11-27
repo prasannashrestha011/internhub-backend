@@ -1,0 +1,21 @@
+{
+	email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+	request_body {
+		max_size 12MB
+	}
+	reverse_proxy api:8080 {
+		header_up -X-Real-IP
+	}
+}
+
+{$STORAGE_DOMAIN} {
+	# Downloads keep their signed Host header; administrative S3 calls stay internal.
+	@download method GET HEAD
+	handle @download {
+		reverse_proxy minio:9000
+	}
+	respond "Method not allowed" 405
+}

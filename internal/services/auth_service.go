@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"time"
@@ -8,6 +9,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/prasanna/student-job-portal/backend/internal/config"
 	"github.com/prasanna/student-job-portal/backend/internal/logger"
@@ -90,6 +92,39 @@ func (s *AuthService) ValidateRefreshToken(token string) (*models.RefreshToken, 
 		return nil, err
 	}
 	return rt, nil
+}
+
+// Consume once and save the replacement together so failures leave the session usable.
+func (s *AuthService) RefreshSession(ctx context.Context, token string) (string, string, error) {
+	var access, refresh string
+	err := s.Repo.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		auth := *s
+		auth.Repo = repositories.NewUserRepository(tx)
+		rt, err := auth.ValidateRefreshToken(token)
+		if err != nil {
+			return err
+		}
+		user, err := auth.Repo.GetByIDContext(ctx, rt.UserID)
+		if err != nil {
+			return err
+		}
+		if !user.CanSignIn() {
+			return ErrEmailNotVerified
+		}
+		if err := auth.RevokeRefreshToken(rt.ID); err != nil {
+			return err
+		}
+		access, err = auth.GenerateAccessToken(user)
+		if err != nil {
+			return err
+		}
+		refresh, err = auth.GenerateRefreshToken(user)
+		return err
+	})
+	if err != nil {
+		return "", "", err
+	}
+	return access, refresh, nil
 }
 
 // RevokeRefreshToken revokes a refresh token by its DB id

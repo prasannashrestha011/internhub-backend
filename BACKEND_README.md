@@ -4,6 +4,9 @@ cd backend
 docker compose up --build
 ```
 
+For the OCI VM, use the [production deployment and recovery guide](docs/DEPLOYMENT.md)
+and `docker-compose.production.yml`.
+
 New accounts require email confirmation. Configure Oracle SMTP and a separate
 OTP secret using the [email verification setup](docs/EMAIL_VERIFICATION.md).
 

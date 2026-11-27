@@ -26,17 +26,20 @@ var (
 type RecruiterProfileService struct {
 	repo        *repositories.RecruiterProfileRepository
 	minioClient *minio.Client
+	urlSigner   *minio.Client
 	bucketName  string
 }
 
 func NewRecruiterProfileService(
 	repo *repositories.RecruiterProfileRepository,
 	minioClient *minio.Client,
+	urlSigner *minio.Client,
 	bucketName string,
 ) *RecruiterProfileService {
 	return &RecruiterProfileService{
 		repo:        repo,
 		minioClient: minioClient,
+		urlSigner:   urlSigner,
 		bucketName:  bucketName,
 	}
 }
@@ -234,10 +237,10 @@ func (s *RecruiterProfileService) GetLogoURL(
 		return "", nil
 	}
 
-	if s.minioClient == nil {
+	if s.urlSigner == nil {
 		return "", errors.New("profile picture storage unavailable")
 	}
-	url, err := s.minioClient.PresignedGetObject(
+	url, err := s.urlSigner.PresignedGetObject(
 		ctx,
 		s.bucketName,
 		objectKey,

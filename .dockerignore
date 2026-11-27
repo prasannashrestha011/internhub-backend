@@ -1,8 +1,15 @@
 .git
 .gitignore
 .env
+.env.*
+!.env.example
+!.env.production.example
+.agents
+.codex
+.aws
 bin
 coverage.out
 docker-compose.yml
+docker-compose.production.yml
 docs
 *.md

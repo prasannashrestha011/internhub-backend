@@ -31,12 +31,13 @@ const maxResumeSize = 10 << 20
 type StudentService struct {
 	repo        *repositories.StudentRepository
 	minioClient *minio.Client
+	urlSigner   *minio.Client
 	cfg         *config.Config
 	log         *logger.Logger
 }
 
-func NewStudentService(repo *repositories.StudentRepository, storage *minio.Client, cfg *config.Config, log *logger.Logger) *StudentService {
-	return &StudentService{repo: repo, minioClient: storage, cfg: cfg, log: log}
+func NewStudentService(repo *repositories.StudentRepository, storage, urlSigner *minio.Client, cfg *config.Config, log *logger.Logger) *StudentService {
+	return &StudentService{repo: repo, minioClient: storage, urlSigner: urlSigner, cfg: cfg, log: log}
 }
 
 func (s *StudentService) GetProfile(userID uuid.UUID) (*models.StudentProfile, error) {
@@ -54,10 +55,10 @@ func (s *StudentService) setProfilePictureURL(ctx context.Context, profile *mode
 	if profile.ProfilePictureKey == "" {
 		return nil
 	}
-	if s.minioClient == nil {
+	if s.urlSigner == nil {
 		return errors.New("profile picture storage unavailable")
 	}
-	url, err := s.minioClient.PresignedGetObject(ctx, s.cfg.MinIO.ProfileBucket, profile.ProfilePictureKey, time.Hour, nil)
+	url, err := s.urlSigner.PresignedGetObject(ctx, s.cfg.MinIO.ProfileBucket, profile.ProfilePictureKey, time.Hour, nil)
 	if err != nil {
 		return err
 	}
@@ -137,10 +138,10 @@ func (s *StudentService) GetResume(ctx context.Context, userID uuid.UUID) (*mode
 	if err != nil {
 		return nil, err
 	}
-	if s.minioClient == nil {
+	if s.urlSigner == nil {
 		return nil, errors.New("CV storage unavailable")
 	}
-	link, err := s.minioClient.PresignedGetObject(ctx, s.cfg.MinIO.StudentDocBucket, resume.ObjectKey, 5*time.Minute, nil)
+	link, err := s.urlSigner.PresignedGetObject(ctx, s.cfg.MinIO.StudentDocBucket, resume.ObjectKey, 5*time.Minute, nil)
 	if err != nil {
 		return nil, err
 	}

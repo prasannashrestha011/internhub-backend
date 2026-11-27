@@ -1,0 +1,133 @@
+name: Test, build and deploy
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  build:
+    # Pull requests are only tested; images are published from main.
+    if: github.event_name != 'pull_request'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: api
+            dockerfile: Dockerfile
+          - name: minio
+            dockerfile: deploy/Dockerfile.minio
+          - name: caddy
+            dockerfile: deploy/Dockerfile.caddy
+    steps:
+      - uses: actions/checkout@v5
+      - name: Compute image names
+        id: meta
+        run: |
+          prefix="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "tags=$prefix/${{ matrix.name }}:latest,$prefix/${{ matrix.name }}:sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          # Matches a standard x86_64 Ubuntu VPS.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    # Never run two deploys at once; let a running deploy finish.
+    concurrency:
+      group: production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: read
+    env:
+      DEPLOY_PATH: /opt/student-job-portal
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Configure SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_PORT: ${{ vars.VPS_PORT || '22' }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_KNOWN_HOSTS: ${{ secrets.VPS_KNOWN_HOSTS }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$VPS_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/deploy_key ~/.ssh/known_hosts
+          cat > ~/.ssh/config <<EOF
+          Host vps
+            HostName $VPS_HOST
+            User $VPS_USER
+            Port $VPS_PORT
+            IdentityFile ~/.ssh/deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+          EOF
+
+      - name: Copy compose file and backup scripts
+        run: |
+          ssh vps "mkdir -p '$DEPLOY_PATH/deploy'"
+          scp docker-compose.production.yml "vps:$DEPLOY_PATH/"
+          scp deploy/backup.sh deploy/restore.sh deploy/portal-backup.service deploy/portal-backup.timer "vps:$DEPLOY_PATH/deploy/"
+
+      - name: Log the VPS in to GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # The token arrives on stdin and expires when this job ends.
+        run: printf '%s' "$GITHUB_TOKEN" | ssh vps "docker login ghcr.io -u '$GITHUB_ACTOR' --password-stdin"
+
+      - name: Pull images and restart
+        run: |
+          ssh vps "bash -s -- '$DEPLOY_PATH'" <<'EOF'
+          set -euo pipefail
+          cd "$1"
+          if [ ! -f .env.production ]; then
+              echo "Missing $1/.env.production; create it from .env.production.example first." >&2
+              exit 1
+          fi
+          dc() { docker compose --env-file .env.production -f docker-compose.production.yml "$@"; }
+          dc config --quiet
+          dc pull
+          dc up -d --remove-orphans --wait --wait-timeout 180
+          docker image prune -f
+          dc ps
+          EOF
+
+      - name: Log the VPS out of GHCR
+        if: always()
+        run: ssh vps "docker logout ghcr.io" || true

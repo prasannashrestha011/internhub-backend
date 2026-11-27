@@ -183,32 +183,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
-	// 2. Set SameSite policy (Lax works for same-origin or localhost dev)
-	c.SetSameSite(http.SameSiteLaxMode)
-
-	// 3. Set Access Token Cookie
-	accessMaxAge := int(h.AuthSvc.Cfg.JWT.AccessExpiry.Seconds())
-	c.SetCookie(
-		"access_token", // Cookie name
-		access,         // Cookie value (JWT)
-		accessMaxAge,   // MaxAge in seconds
-		"/",            // Path
-		"",             // Domain (leave empty for current host)
-		true,           // Secure (true forces HTTPS only)
-		true,           // HttpOnly (prevents client-side JS/XSS access)
-	)
-
-	// 4. Set Refresh Token Cookie
-	refreshMaxAge := int(h.AuthSvc.Cfg.JWT.RefreshExpiry.Seconds())
-	c.SetCookie(
-		"refresh_token",
-		refresh,
-		refreshMaxAge,
-		"/", // Or scope to "/api/v1/auth/refresh"
-		"",
-		true,
-		true,
-	)
+	h.setSessionCookies(c, access, refresh)
 
 	// 5. Return sanitized user details (excluding raw tokens)
 	responses.Success(c, http.StatusOK, "Logged in successfully", gin.H{
@@ -221,54 +196,45 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 // Refresh issues new access and refresh tokens given a valid refresh token
 func (h *AuthHandler) Refresh(c *gin.Context) {
-	var body struct {
-		RefreshToken string `json:"refresh_token" binding:"required"`
+	token, _ := c.Cookie("refresh_token")
+	cookieSession := token != ""
+	if !cookieSession {
+		var body struct {
+			RefreshToken string `json:"refresh_token" binding:"required"`
+		}
+		if err := c.ShouldBindJSON(&body); err != nil {
+			responses.Error(c, http.StatusBadRequest, "Refresh token is required")
+			return
+		}
+		token = body.RefreshToken
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		responses.ErrorWithDetails(c, http.StatusBadRequest, "Invalid input", gin.H{"error": err.Error()})
-		return
-	}
-
-	rt, err := h.AuthSvc.ValidateRefreshToken(body.RefreshToken)
+	access, refresh, err := h.AuthSvc.RefreshSession(c.Request.Context(), token)
 	if err != nil {
-		responses.Error(c, http.StatusUnauthorized, "Invalid refresh token")
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			responses.Error(c, http.StatusUnauthorized, "Invalid refresh token")
+		case errors.Is(err, services.ErrEmailNotVerified):
+			h.verificationError(c, err)
+		default:
+			h.Logger.Error("session refresh failed")
+			responses.Error(c, http.StatusInternalServerError, "Unable to refresh session")
+		}
 		return
 	}
-
-	user, err := h.AuthSvc.Repo.GetByID(rt.UserID)
-	if err != nil {
-		responses.Error(c, http.StatusInternalServerError, "User not found")
-		return
-	}
-	if user.Role != models.RoleStudent && user.Role != models.RoleEmployer {
-		responses.Error(c, http.StatusForbidden, "account role is no longer supported")
-		return
-	}
-	if !user.CanSignIn() {
-		h.verificationError(c, services.ErrEmailNotVerified)
-		return
-	}
-
-	// Revoke used refresh token
-	if err := h.AuthSvc.RevokeRefreshToken(rt.ID); err != nil {
-		// log but continue
-		h.Logger.Warn("failed to revoke refresh token: %v", err)
-	}
-
-	access, err := h.AuthSvc.GenerateAccessToken(user)
-	if err != nil {
-		responses.Error(c, http.StatusInternalServerError, "Failed to generate access token")
-		return
-	}
-
-	newRefresh, err := h.AuthSvc.GenerateRefreshToken(user)
-	if err != nil {
-		responses.Error(c, http.StatusInternalServerError, "Failed to generate refresh token")
-		return
-	}
-
+	h.setSessionCookies(c, access, refresh)
 	expiresAt := time.Now().Add(h.AuthSvc.Cfg.JWT.AccessExpiry)
-	responses.Success(c, http.StatusOK, "Token refreshed", tokenResponse{AccessToken: access, RefreshToken: newRefresh, Expiry: expiresAt})
+	if cookieSession {
+		responses.Success(c, http.StatusOK, "Session refreshed", gin.H{"expires_at": expiresAt})
+		return
+	}
+	responses.Success(c, http.StatusOK, "Token refreshed", tokenResponse{AccessToken: access, RefreshToken: refresh, Expiry: expiresAt})
+}
+
+func (h *AuthHandler) setSessionCookies(c *gin.Context, access, refresh string) {
+	c.SetSameSite(http.SameSiteLaxMode)
+	domain := h.AuthSvc.Cfg.App.CookieDomain
+	c.SetCookie("access_token", access, int(h.AuthSvc.Cfg.JWT.AccessExpiry.Seconds()), "/", domain, true, true)
+	c.SetCookie("refresh_token", refresh, int(h.AuthSvc.Cfg.JWT.RefreshExpiry.Seconds()), "/", domain, true, true)
 }
 
 // Logout revokes provided refresh token
@@ -305,8 +271,9 @@ func (h *AuthHandler) Logout(c *gin.Context) {
 func (h *AuthHandler) clearRefreshTokenCookie(c *gin.Context) {
 	// SetCookie(name, value, maxAge, path, domain, secure, httpOnly)
 	// maxAge -1 deletes the cookie immediately on the browser
-	c.SetCookie("access_token", "", -1, "/", "", true, true)
-	c.SetCookie("refresh_token", "", -1, "/", "", true, true)
+	domain := h.AuthSvc.Cfg.App.CookieDomain
+	c.SetCookie("access_token", "", -1, "/", domain, true, true)
+	c.SetCookie("refresh_token", "", -1, "/", domain, true, true)
 }
 
 // Me returns current authenticated user

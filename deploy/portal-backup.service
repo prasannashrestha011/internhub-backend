@@ -1,0 +1,11 @@
+[Unit]
+Description=Back up Student Job Portal to OCI Object Storage
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/student-job-portal
+EnvironmentFile=/opt/student-job-portal/.env.production
+ExecStart=/usr/bin/bash /opt/student-job-portal/deploy/backup.sh

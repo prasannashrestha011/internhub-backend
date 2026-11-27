@@ -68,7 +68,15 @@ func (r *UserRepository) GetRefreshTokenByHash(token string) (*models.RefreshTok
 }
 
 func (r *UserRepository) RevokeRefreshTokenByID(id uuid.UUID) error {
-	return r.DB.Model(&models.RefreshToken{}).Where("id = ?", id).Update("revoked", true).Error
+	result := r.DB.Model(&models.RefreshToken{}).
+		Where("id = ? AND revoked = false AND expires_at > ?", id, time.Now()).Update("revoked", true)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return gorm.ErrRecordNotFound
+	}
+	return nil
 }
 
 func (r *UserRepository) RevokeAllRefreshTokensForUser(userID uuid.UUID) error {

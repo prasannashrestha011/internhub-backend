@@ -1,7 +1,9 @@
 package database
 
 import (
-	"fmt"
+	"net"
+	"net/url"
+	"time"
 
 	"github.com/prasanna/student-job-portal/backend/internal/config"
 	"github.com/prasanna/student-job-portal/backend/internal/logger"
@@ -10,17 +12,11 @@ import (
 )
 
 func Connect(cfg *config.DatabaseConfig, log *logger.Logger) (*gorm.DB, error) {
-	dsn := fmt.Sprintf(
-		"host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host,
-		cfg.Port,
-		cfg.User,
-		cfg.Password,
-		cfg.Name,
-		cfg.SSLMode,
-	)
+	dsn := url.URL{Scheme: "postgres", User: url.UserPassword(cfg.User, cfg.Password), Host: net.JoinHostPort(cfg.Host, cfg.Port), Path: "/" + cfg.Name}
+	params := url.Values{"sslmode": {cfg.SSLMode}, "connect_timeout": {"10"}}
+	dsn.RawQuery = params.Encode()
 
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn.String()), &gorm.Config{})
 	if err != nil {
 		log.Error("Failed to connect to database: %v", err)
 		return nil, err
@@ -33,8 +29,10 @@ func Connect(cfg *config.DatabaseConfig, log *logger.Logger) (*gorm.DB, error) {
 	}
 
 	// Set connection pool settings
-	sqlDB.SetMaxOpenConns(100)
-	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(10)
+	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetConnMaxLifetime(30 * time.Minute)
+	sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 
 	log.Info("Database connected successfully")
 	return db, nil

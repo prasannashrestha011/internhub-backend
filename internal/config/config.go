@@ -2,7 +2,9 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"net/mail"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -46,8 +48,11 @@ func (e EmailConfig) Validate() error {
 }
 
 type AppConfig struct {
-	Env  string
-	Port string
+	Env            string
+	Port           string
+	AllowedOrigins []string
+	TrustedProxies []string
+	CookieDomain   string
 }
 
 type DatabaseConfig struct {
@@ -67,6 +72,8 @@ type JWTConfig struct {
 
 type MinIOConfig struct {
 	Endpoint         string
+	PublicURL        string
+	Region           string
 	AccessKey        string
 	SecretKey        string
 	UseSSL           bool
@@ -85,8 +92,11 @@ func Load() (*Config, error) {
 
 	config := &Config{
 		App: AppConfig{
-			Env:  getEnv("APP_ENV", "development"),
-			Port: getEnv("APP_PORT", "8080"),
+			Env:            getEnv("APP_ENV", "development"),
+			Port:           getEnv("APP_PORT", "8080"),
+			AllowedOrigins: splitList(getEnv("CORS_ALLOWED_ORIGINS", "http://localhost:3000")),
+			TrustedProxies: splitList(getEnv("TRUSTED_PROXIES", "")),
+			CookieDomain:   getEnv("COOKIE_DOMAIN", ""),
 		},
 		Database: DatabaseConfig{
 			Host:     getEnv("DB_HOST", "localhost"),
@@ -103,6 +113,8 @@ func Load() (*Config, error) {
 		},
 		MinIO: MinIOConfig{
 			Endpoint:         getEnv("MINIO_ENDPOINT", "localhost:9000"),
+			PublicURL:        getEnv("MINIO_PUBLIC_URL", ""),
+			Region:           getEnv("MINIO_REGION", "us-east-1"),
 			AccessKey:        getEnv("MINIO_ACCESS_KEY", ""),
 			SecretKey:        getEnv("MINIO_SECRET_KEY", ""),
 			UseSSL:           getEnv("MINIO_USE_SSL", "false") == "true",
@@ -143,6 +155,58 @@ func (c *Config) Validate() error {
 	if c.JWT.AccessSecret == "" {
 		return fmt.Errorf("JWT_ACCESS_SECRET is required")
 	}
+	if c.JWT.AccessExpiry <= 0 || c.JWT.RefreshExpiry <= 0 {
+		return fmt.Errorf("JWT_ACCESS_EXPIRY and JWT_REFRESH_EXPIRY must be positive durations")
+	}
+	if len(c.App.AllowedOrigins) == 0 {
+		return fmt.Errorf("CORS_ALLOWED_ORIGINS is required")
+	}
+	for _, origin := range c.App.AllowedOrigins {
+		u, err := url.Parse(origin)
+		if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") || strings.Contains(origin, "*") {
+			return fmt.Errorf("CORS_ALLOWED_ORIGINS must contain exact HTTP(S) origins")
+		}
+		if c.App.Env == "production" && (u.Scheme != "https" || u.Hostname() == "localhost") {
+			return fmt.Errorf("production CORS origins must use HTTPS and a public hostname")
+		}
+		if c.App.CookieDomain != "" {
+			domain := strings.TrimPrefix(c.App.CookieDomain, ".")
+			if u.Hostname() != domain && !strings.HasSuffix(u.Hostname(), "."+domain) {
+				return fmt.Errorf("COOKIE_DOMAIN must contain every allowed frontend origin")
+			}
+		}
+	}
+	for _, proxy := range c.App.TrustedProxies {
+		_, network, err := net.ParseCIDR(proxy)
+		if net.ParseIP(proxy) == nil && err != nil {
+			return fmt.Errorf("TRUSTED_PROXIES must contain IP addresses or CIDRs")
+		}
+		if network != nil {
+			if ones, _ := network.Mask.Size(); ones == 0 {
+				return fmt.Errorf("TRUSTED_PROXIES must not trust the entire internet")
+			}
+		}
+	}
+	if c.MinIO.PublicURL != "" {
+		u, err := url.Parse(c.MinIO.PublicURL)
+		if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return fmt.Errorf("MINIO_PUBLIC_URL must be an HTTP(S) origin without a path")
+		}
+		if c.App.Env == "production" && (u.Scheme != "https" || u.Hostname() == "localhost") {
+			return fmt.Errorf("production MINIO_PUBLIC_URL must use HTTPS and a public hostname")
+		}
+	}
+	if c.App.Env == "production" {
+		if len(c.JWT.AccessSecret) < 32 || c.JWT.AccessSecret == "your-access-secret" {
+			return fmt.Errorf("production JWT_ACCESS_SECRET must contain at least 32 random characters")
+		}
+		if c.Database.Password == "" || c.Database.Password == "postgres" || c.Database.Password == "your-database-password" || c.MinIO.AccessKey == "minioadmin" || c.MinIO.SecretKey == "minioadmin" {
+			return fmt.Errorf("production database and storage credentials must not use defaults")
+		}
+		if c.MinIO.PublicURL == "" {
+			return fmt.Errorf("MINIO_PUBLIC_URL is required in production")
+		}
+	}
 	if c.MinIO.AccessKey == "" {
 		return fmt.Errorf("MINIO_ACCESS_KEY is required")
 	}
@@ -155,6 +219,16 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func splitList(value string) []string {
+	var values []string
+	for _, item := range strings.Split(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			values = append(values, item)
+		}
+	}
+	return values
 }
 
 func (c *Config) GetDSN() string {

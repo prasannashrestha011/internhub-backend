@@ -42,6 +42,7 @@ func TestRegistrationConfirmationAndLogin(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := &config.Config{JWT: config.JWTConfig{AccessSecret: "test-secret", AccessExpiry: time.Hour, RefreshExpiry: time.Hour}, Email: config.EmailConfig{OTPSecret: strings.Repeat("otp-test", 4)}}
+	cfg.App.CookieDomain = "example.com"
 	log := logger.New("test")
 	svc := services.NewAuthService(repositories.NewUserRepository(db), cfg, log)
 	sender := &testVerificationSender{}
@@ -54,6 +55,7 @@ func TestRegistrationConfirmationAndLogin(t *testing.T) {
 	router.POST("/resend-verification", handler.ResendVerification)
 	router.POST("/login", handler.Login)
 	router.POST("/refresh", handler.Refresh)
+	router.POST("/logout", handler.Logout)
 	request := func(path string, body any, want int) *httptest.ResponseRecorder {
 		t.Helper()
 		payload, _ := json.Marshal(body)
@@ -90,6 +92,44 @@ func TestRegistrationConfirmationAndLogin(t *testing.T) {
 		if len(response.Result().Cookies()) != 2 {
 			t.Fatal("verified login did not set session cookies")
 		}
+		refreshCookie := response.Result().Cookies()[1]
+		cookieRequest := func(path string, cookie *http.Cookie, want int) *httptest.ResponseRecorder {
+			t.Helper()
+			req := httptest.NewRequest(http.MethodPost, path, nil)
+			req.AddCookie(cookie)
+			result := httptest.NewRecorder()
+			router.ServeHTTP(result, req)
+			if result.Code != want {
+				t.Fatalf("%s: got %d want %d: %s", path, result.Code, want, result.Body)
+			}
+			return result
+		}
+		rotated := cookieRequest("/refresh", refreshCookie, 200)
+		if strings.Contains(rotated.Body.String(), "access_token") || strings.Contains(rotated.Body.String(), "refresh_token") {
+			t.Fatal("cookie refresh exposed tokens in JSON")
+		}
+		cookies := rotated.Result().Cookies()
+		if len(cookies) != 2 || cookies[1].Value == refreshCookie.Value {
+			t.Fatal("refresh did not rotate session cookies")
+		}
+		for _, cookie := range cookies {
+			if !cookie.Secure || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.MaxAge <= 0 || cookie.Domain != cfg.App.CookieDomain {
+				t.Fatalf("unsafe session cookie: %s", cookie.Name)
+			}
+		}
+		cookieRequest("/refresh", refreshCookie, 401)
+		legacyRefresh := request("/refresh", gin.H{"refresh_token": cookies[1].Value}, 200)
+		if !strings.Contains(legacyRefresh.Body.String(), `"refresh_token"`) {
+			t.Fatal("JSON clients lost refresh token response")
+		}
+		logoutCookie := legacyRefresh.Result().Cookies()[1]
+		loggedOut := cookieRequest("/logout", logoutCookie, 200)
+		for _, cookie := range loggedOut.Result().Cookies() {
+			if cookie.MaxAge >= 0 || cookie.Domain != cfg.App.CookieDomain {
+				t.Fatal("logout did not clear cookies on the configured domain")
+			}
+		}
+		cookieRequest("/refresh", logoutCookie, 401)
 		request("/verify-email", gin.H{"email": email, "code": sender.code}, 400)
 		// Email confirmation must not create an employer profile.
 		var count int64

@@ -105,6 +105,9 @@ func (s *InternshipService) GetInternshipDetail(ctx context.Context, id uuid.UUI
 	if err != nil {
 		return nil, err
 	}
+	if internship.Status != enums.InternshipStatusPublished {
+		return nil, ErrInternshipNotFound
+	}
 	if err := s.repo.LoadPublicIssuer(ctx, internship); err != nil {
 		return nil, err
 	}

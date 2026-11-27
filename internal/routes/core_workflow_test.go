@@ -27,6 +27,7 @@ import (
 	"github.com/prasanna/student-job-portal/backend/internal/routes"
 	"github.com/prasanna/student-job-portal/backend/internal/seeder"
 	"github.com/prasanna/student-job-portal/backend/internal/services"
+	portalstorage "github.com/prasanna/student-job-portal/backend/internal/storage"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -54,6 +55,8 @@ func TestCoreRecruitmentWorkflow(t *testing.T) {
 	cfg.Email.OTPSecret = strings.Repeat("test-secret-", 4)
 	cfg.MinIO.StudentDocBucket = "student-documents"
 	cfg.MinIO.ProfileBucket = "profiles"
+	cfg.MinIO.Endpoint, cfg.MinIO.PublicURL = "minio:9000", "https://files.test"
+	cfg.MinIO.AccessKey, cfg.MinIO.SecretKey = "key", "secret"
 	log := logger.New("test")
 	puts, deletes := 0, 0
 	failUploads := false
@@ -76,7 +79,11 @@ func TestCoreRecruitmentWorkflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := gin.New()
-	routes.Register(router, db, cfg, log, storage)
+	signer, err := portalstorage.NewURLSigner(&cfg.MinIO)
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes.Register(router, db, cfg, log, storage, signer)
 	auth := services.NewAuthService(repositories.NewUserRepository(db), cfg, log)
 	token := func(email string) string {
 		t.Helper()
@@ -164,6 +171,18 @@ func TestCoreRecruitmentWorkflow(t *testing.T) {
 	if err := json.Unmarshal(request("POST", "/recruiters/me/internships", newEmployer, posting, 201), &firstPosting); err != nil || firstPosting.Status != "published" {
 		t.Fatalf("first posting=%s: %v", firstPosting.Status, err)
 	}
+	posting["status"] = "private"
+	var draft models.Internship
+	if err := json.Unmarshal(request("POST", "/recruiters/me/internships", newEmployer, posting, 201), &draft); err != nil {
+		t.Fatal(err)
+	}
+	request("GET", "/internships/"+draft.ID.String(), "", nil, 404)
+	request("GET", "/internships/"+draft.ID.String(), newEmployer, nil, 404)
+	request("GET", "/recruiters/me/internships/"+draft.ID.String(), "", nil, 401)
+	request("GET", "/recruiters/me/internships/"+draft.ID.String(), student, nil, 403)
+	request("GET", "/recruiters/me/internships/"+draft.ID.String(), employer, nil, 404)
+	request("GET", "/recruiters/me/internships/"+draft.ID.String(), newEmployer, nil, 200)
+	posting["status"] = "published"
 
 	request("POST", "/students/me/profile", student, map[string]interface{}{"full_name": "Student", "college_name": "Any college", "degree": "BCA"}, 200)
 	var internship models.Internship
@@ -308,7 +327,7 @@ func TestCoreRecruitmentWorkflow(t *testing.T) {
 	request("PUT", "/recruiters/me/internships/"+internship.ID.String(), employer, map[string]string{"status": "published"}, 200)
 	for _, path := range []string{"/internships", "/internships/" + internship.ID.String(), "/students/me/applications"} {
 		data := request("GET", path, student, nil, 200)
-		if !strings.Contains(string(data), `"organization_logo":"https://storage.test/profiles/organization-logos/`) || !strings.Contains(string(data), "X-Amz-Signature=") {
+		if !strings.Contains(string(data), `"organization_logo":"https://files.test/profiles/organization-logos/`) || !strings.Contains(string(data), "X-Amz-Signature=") {
 			t.Fatalf("missing signed company logo in %s", path)
 		}
 	}
